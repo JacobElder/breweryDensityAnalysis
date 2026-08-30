@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from breweries.census_client import ACS5_YEAR, STATE_FIPS, get
+from breweries.census_client import ACS5_YEAR, ACS_MISSING_SENTINELS, STATE_FIPS, get
 from breweries.manifest import log_fetch
 
 RAW_DIR = Path("data/raw/acs")
@@ -126,32 +126,35 @@ def fetch_national(geography: str, force: bool = False) -> Path:
     return dest
 
 
-def load_national(geography: str) -> pd.DataFrame:
-    path = fetch_national(geography)
-    df = pd.read_csv(path)
-
+def _process(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce ACS numeric columns (honoring suppression sentinels) and compute
+    total population and adults 21+. Geo-id columns (state/county/place/CBSA)
+    are left as strings, exactly as loaded, to preserve zero-padded FIPS codes
+    (e.g. Colorado's state FIPS "08"; letting pandas infer them as int would
+    silently strip the leading zero and break every downstream FIPS join).
+    """
     for col in ["B01001_001E"] + AGE_VARS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+        # ACS uses large negative sentinels (e.g. -666666666) for suppressed/
+        # not-applicable cells — never sum these in as if they were real counts.
+        df.loc[df[col].isin(ACS_MISSING_SENTINELS), col] = pd.NA
 
     df["total_population"] = df["B01001_001E"]
-    df["adults_21plus"] = df[AGE_VARS].sum(axis=1)
+    df["adults_21plus"] = df[AGE_VARS].sum(axis=1, min_count=1)
 
     keep = ["NAME", "total_population", "adults_21plus"]
     geo_cols = [c for c in df.columns if c not in keep and c not in AGE_VARS and c != "B01001_001E"]
     return df[keep + geo_cols]
+
+
+def load_national(geography: str) -> pd.DataFrame:
+    path = fetch_national(geography)
+    df = pd.read_csv(path, dtype=str)
+    return _process(df)
 
 
 def load(state_abbr: str, geography: str) -> pd.DataFrame:
     """Load cached ACS data and compute total population and adults 21+."""
     path = fetch(state_abbr, geography)
-    df = pd.read_csv(path)
-
-    for col in ["B01001_001E"] + AGE_VARS:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df["total_population"] = df["B01001_001E"]
-    df["adults_21plus"] = df[AGE_VARS].sum(axis=1)
-
-    keep = ["NAME", "total_population", "adults_21plus"]
-    geo_cols = [c for c in df.columns if c not in keep and c not in AGE_VARS and c != "B01001_001E"]
-    return df[keep + geo_cols]
+    df = pd.read_csv(path, dtype=str)
+    return _process(df)

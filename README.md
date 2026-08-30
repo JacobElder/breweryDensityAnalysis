@@ -2,7 +2,7 @@
 
 Ranks US geographies by brewery density and models which places have more
 breweries than expected after conditioning on tourism, age structure, income,
-and state regulatory regime.
+college enrollment, and state regulatory regime.
 
 ## Setup
 
@@ -28,8 +28,12 @@ https://api.census.gov/data/key_signup.html.
 
 - `src/breweries/` — pipeline code (`sources/` per data source, `geocode.py`,
   `census_geocoder.py`, `manifest.py`)
-- `scripts/` — one-off assembly scripts per geographic slice (e.g.
-  `build_nc_county_dataset.py`)
+- `scripts/` — pipeline-assembly and analysis scripts: per-state calibration
+  (`build_{nc,mi,co,or}_county_dataset.py`), national assembly
+  (`build_national_county_dataset.py`, `build_national_cbsa_place_datasets.py`,
+  `geocode_national.py`), the two models (`fit_national_models.py`,
+  `build_capture_rate_model.py`), and rendered outputs
+  (`build_choropleth.py`, `build_top50_table.py`)
 - `data/raw/` — cached source pulls, timestamped, never re-fetched automatically.
   TIGER/Line geometry is cached as GeoParquet (brotli-compressed) rather than
   the zipped shapefiles Census serves — `src/breweries/sources/tiger.py`
@@ -51,8 +55,21 @@ that: all 50 states + DC geocoded to county/CBSA/place, covariates (income,
 age, college share, tourism) pulled, two ranking models fit
 (`scripts/fit_national_models.py` — empirical Bayes shrinkage, and a
 negative-binomial residual model with state fixed effects), and a national
-choropleth (`scripts/build_choropleth.py`). See `docs/methods_memo.md` for the
-full write-up: coverage-error findings, every inclusion rule, and what the
-numbers can't support. National OSM pull is a lower-priority third signal, used
-so far only for the NC capture-recapture diagnostic (see the memo's Section 5.3
-for why that diagnostic backfired informatively rather than being adopted).
+choropleth, both a full version and a population-floored variant
+(`scripts/build_choropleth.py`), and a top-50-counties table image
+(`scripts/build_top50_table.py`). See `docs/methods_memo.md` for the full
+write-up: coverage-error findings, every inclusion rule, and what the numbers
+can't support. OSM has been fetched for all 50 states + DC (`data/raw/osm/`)
+but isn't incorporated into the headline datasets or either model — it's used
+quantitatively only in the NC capture-recapture diagnostic (see the memo's
+Section 5.3 for why that diagnostic backfired informatively rather than being
+adopted as a national third signal).
+
+This codebase went through a 4-agent parallel correctness audit (statistical
+modeling, data-source pipeline, build/analysis scripts, documentation) after
+the initial build. Real bugs it caught: a normal-approximation confidence
+interval on a skewed Gamma posterior that materially understated uncertainty
+for low-count counties/places (now exact Gamma quantiles), an ACS
+suppressed-data sentinel (`-666666666`) that could have silently corrupted the
+adults-21+ denominator for small geographies, and a FIPS zero-padding strip
+that would have broken joins if a caller didn't defensively re-pad downstream.

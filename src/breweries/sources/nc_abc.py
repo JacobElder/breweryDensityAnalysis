@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from breweries.manifest import log_fetch
+from breweries.manifest import log_fetch, log_filter
 
 COUNTS_URL = "https://abc2.nc.gov/Search/SubmitPermitsCount"
 PERMIT_PAGE_URL = "https://abc2.nc.gov/Search/PermitCounts"
@@ -67,6 +67,10 @@ def load_county_counts() -> pd.DataFrame:
     path = fetch()
     df = pd.read_excel(path)
     df.columns = ["county", "brewery_permit_count"]
+    n0 = len(df)
+
     df = df[df["county"] != "Totals"].reset_index(drop=True)
+    log_filter("nc_abc", "drop trailing 'Totals' summary row", n0, len(df))
+
     df["county"] = df["county"].str.replace(" County", "", regex=False).str.strip()
     return df

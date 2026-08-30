@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from breweries.census_client import ACS5_YEAR, get
+from breweries.census_client import ACS5_YEAR, ACS_MISSING_SENTINELS, get
 from breweries.manifest import log_fetch
 from breweries.sources import tiger
 
@@ -76,7 +76,6 @@ def load_county_covariates() -> pd.DataFrame:
     demo["county"] = demo["county"].str.zfill(3)
     # ACS uses large negative sentinels (e.g. -666666666) for suppressed/inapplicable
     # cells (typically counties too small to estimate reliably) — never average these in.
-    ACS_MISSING_SENTINELS = {-666666666, -222222222, -333333333, -555555555, -888888888, -999999999}
     for col in ["B19013_001E", "B01002_001E", "B14001_001E", "B14001_008E", "B14001_009E"]:
         demo[col] = pd.to_numeric(demo[col], errors="coerce")
         demo.loc[demo[col].isin(ACS_MISSING_SENTINELS), col] = pd.NA

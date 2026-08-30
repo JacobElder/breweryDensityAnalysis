@@ -67,7 +67,7 @@ def main() -> None:
               "shrunken posterior rate, not raw rate (see methods memo).",
               ha="center", fontsize=9, color="#555555")
     fig.text(0.5, 0.01,
-              "Source: Open Brewery DB (uncorrected for coverage gap, estimated 16-38% "
+              "Source: Open Brewery DB (uncorrected for coverage gap, estimated 7-38% "
               "undercount depending on state) + Census ACS 5-year (2020-2024).",
               ha="center", fontsize=7.5, color="#777777")
 

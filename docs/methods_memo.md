@@ -17,6 +17,12 @@ place) nationwide, plus two ranking models:
 All numbers below are **uncorrected OBDB counts** unless stated otherwise. Section
 5 quantifies how far short of the true count that is.
 
+Rendered outputs (`scripts/build_choropleth.py`, `scripts/build_top50_table.py`,
+all reading Model A's output): a national county-level choropleth of the
+shrunken rate, a population-floored variant of the same map (counties under
+50k adults 21+ shown gray rather than colored, since shrinkage reduces but
+does not eliminate small-county noise), and a top-50-counties table image.
+
 ## 2. Inclusion rules (every filter, as implemented in code)
 
 **Brewery definition (OBDB)** — `src/breweries/sources/obdb.py`:
@@ -96,7 +102,7 @@ rather than OBDB or CBP:
 |---|---|---|---|
 | NC | 422 | 418 | 101% |
 | MI | 395 | 410 | 96% |
-| CO | 408-410 | 423 | 97% |
+| CO | 408 | 423 | 97% |
 | OR | 285 (primary) | 297 | 96% |
 
 Against that anchor, OBDB's capture rate varies enormously by state:
@@ -213,7 +219,7 @@ attached.
 Top of the shrunken residual ranking ("more breweries than covariates predict"):
 Buncombe NC (Asheville), Charleston SC, Fulton GA (Atlanta), St. Louis city MO,
 Travis TX (Austin), Richmond city VA. Full table:
-`data/processed/us_county_residual_rankings.csv`.
+`data/processed/us_county_residual_rankings.parquet`.
 
 The raw (unshrunk) residual ratio is dominated by small-expected-count noise
 (e.g. a county "expected" 0.27 breweries that has 2 looks like a 7x outlier) —
@@ -229,13 +235,15 @@ mean.
   precise — they're shrunk toward priors for exactly this reason, but shrinkage
   reduces noise, it doesn't manufacture missing ground truth.
 - Any state without its own calibration data is carrying OBDB's raw undercount
-  (16-38% observed range) partially corrected by a wide, honestly-uncertain
+  (7-38% observed range across the 4 calibration states) partially corrected by a wide, honestly-uncertain
   interval — not a precise correction.
 - The choropleth and rankings are **not** capture-rate-corrected by default
   (the map explicitly says so); `capture_rate_model.apply_correction()` exists
   to produce a corrected version but doing so at every county nationally
   compounds the state-vs-density confound described in Section 5.2.
-- OSM was not used as a national third signal for the headline numbers (only
-  for the NC capture-recapture diagnostic) — its national fetch was a lower
-  priority than the core pipeline and, per Section 5.3, would need the same
-  correlated-crowdsourcing caveat if used quantitatively.
+- OSM data has been fetched for all 50 states + DC (`data/raw/osm/`), but it
+  is not incorporated into the headline county/CBSA/place datasets or either
+  model — the only place it's used quantitatively is the NC capture-recapture
+  diagnostic in Section 5.3, and per that section's finding, using it as a
+  second signal at national scale would need the same correlated-crowdsourcing
+  caveat, not a straightforward "more data is better" treatment.

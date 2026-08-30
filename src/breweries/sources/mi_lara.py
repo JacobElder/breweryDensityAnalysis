@@ -79,7 +79,13 @@ COUNTY_NAME_FIXES = {
 
 def county_counts() -> pd.DataFrame:
     df = load_breweries()
+    n0 = len(df)
+    # groupby() silently drops rows whose key is NaN, so verify the aggregate
+    # accounts for every row rather than trusting that silently.
     counts = df.groupby("County: County").size().rename("lara_permit_count").reset_index()
+    n_after = int(counts["lara_permit_count"].sum())
+    if n_after != n0:
+        log_filter("mi_lara", "groupby County: County (rows with missing county dropped)", n0, n_after)
     counts.columns = ["county", "lara_permit_count"]
     counts["county"] = counts["county"].str.title().replace(COUNTY_NAME_FIXES)
     return counts

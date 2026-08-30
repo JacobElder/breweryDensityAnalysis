@@ -75,6 +75,12 @@ def load(include_additional_locations: bool = False) -> pd.DataFrame:
 
 def county_counts(include_additional_locations: bool = False) -> pd.DataFrame:
     df = load(include_additional_locations)
+    n0 = len(df)
+    # groupby() silently drops rows whose key is NaN, so verify the aggregate
+    # accounts for every row rather than trusting that silently.
     counts = df.groupby("county").size().rename("olcc_count").reset_index()
+    n_after = int(counts["olcc_count"].sum())
+    if n_after != n0:
+        log_filter("or_olcc", "groupby county (rows with missing county dropped)", n0, n_after)
     counts.columns = ["county_name", "olcc_count"]
     return counts

@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from breweries.census_geocoder import geocode_addresses  # noqa: F401  (imported for side effects check)
 from breweries.geocode import assign_geographies, fill_missing_coords
 from breweries.sources import acs, cbp, nc_abc, obdb, osm
 

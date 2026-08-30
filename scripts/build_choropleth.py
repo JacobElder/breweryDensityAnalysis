@@ -135,7 +135,7 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
     fig.text(0.5, 0.01,
               "Sources: Open Brewery DB, Census ACS 5-year (2020-2024), empirical Bayes shrinkage "
               "calibrated on NC/MI/CO/OR state licensee data. OBDB undercounts true brewery count "
-              "by an estimated 16-38% depending on state (see methods memo) — this map is "
+              "by an estimated 7-38% depending on state (see methods memo) — this map is "
               "uncorrected for that gap.",
               ha="center", fontsize=7.5, color="#555555", wrap=True)
 

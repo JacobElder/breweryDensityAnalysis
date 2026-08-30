@@ -82,7 +82,7 @@ def apply_correction(obdb_count: int, state: str, log_density: float | None = No
     result = correction_factor(state, log_density)
     corrected = obdb_count / result["capture_rate"]
     out = {"obdb_count": obdb_count, "corrected_estimate": corrected, **result}
-    if result["ci_low"]:
+    if result["ci_low"] is not None:
         out["corrected_low"] = obdb_count / result["ci_high"]
         out["corrected_high"] = obdb_count / result["ci_low"]
     return out

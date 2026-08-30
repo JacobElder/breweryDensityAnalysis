@@ -20,6 +20,13 @@ STATE_FIPS = {
 CBP_YEAR = 2023  # latest available CBP vintage as of this pipeline (verified via api.census.gov/data.json)
 ACS5_YEAR = 2024  # latest available ACS 5-year vintage as of this pipeline (2020-2024 estimates)
 
+# ACS tables use large negative sentinels for suppressed/not-applicable cells
+# (typically geographies too small to produce a reliable estimate). These are
+# never literal counts and must be coerced to missing (NaN), not summed/averaged
+# in as if they were real values. Shared by every module that reads ACS estimate
+# columns (acs.py, covariates.py).
+ACS_MISSING_SENTINELS = {-666666666, -222222222, -333333333, -555555555, -888888888, -999999999}
+
 
 def api_key() -> str:
     key = os.environ.get("CENSUS_API_KEY")

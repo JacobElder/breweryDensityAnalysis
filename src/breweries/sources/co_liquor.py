@@ -67,6 +67,7 @@ def load() -> pd.DataFrame:
     df = pd.DataFrame(rows)
 
     has_coords = df["lat"].notna() & df["lon"].notna()
-    log_filter("co_liquor", "has valid lat/lon", n0, int(has_coords.sum()))
+    df = df[has_coords].reset_index(drop=True)
+    log_filter("co_liquor", "has valid lat/lon", n0, len(df))
 
     return df
