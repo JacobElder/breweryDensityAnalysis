@@ -1,34 +1,54 @@
-"""OBDB coverage-correction model, fit on the four calibration states (NC, MI, CO, OR).
+"""OBDB coverage-correction model, fit on 9 calibration states
+(NC, MI, CO, OR, WA, TX, GA, WI, PA).
 
 Model: log((obdb_count + 0.5) / (licensee_count + 0.5)) ~ log(population_density),
 weighted by licensee_count (WLS), fit in scripts/build_capture_rate_model.py.
 
 Three honest findings drive how this is used, not just the point estimates:
 
-1. Population density has a real but small effect (coef ~0.076, p<0.001): denser
+1. Population density has a real but small effect (coef ~0.047, p<0.001): denser
    counties have higher OBDB capture rates, i.e. OBDB undercounts rural areas more.
-2. State identity dominates over density. A fixed-effects model's four state
-   intercepts range over roughly 4x the magnitude of the density gradient across
-   its full observed range, and a model with no state term has essentially no
-   explanatory power (R^2=0.09 even including density).
-3. The exposure-weighted *aggregate* ratio across all 216 calibration counties
-   (obdb_count.sum()/licensee_count.sum() = 81.8%) is a different quantity from
-   "the capture rate of a typical county" (~70.5%) — the aggregate is pulled up by
-   a handful of large, high-capture counties (Buncombe, Mecklenburg, Wake, Denver).
-   POOLED_CAPTURE_RATE below is deliberately the latter (WLS-regression-implied),
-   not the former, because correction_factor() applies its fallback to arbitrary
-   counties nationally, most of which are small/medium, not large metros — using
-   the aggregate ratio would systematically under-correct exactly the
-   smaller/rural counties this correction is supposed to help.
+2. State identity dominates over density. A fixed-effects model's state
+   intercepts vary far more than the density gradient across its full observed
+   range, and a model with no state term has essentially no explanatory power.
+3. The exposure-weighted *aggregate* ratio across all pooled counties is a
+   different quantity from "the capture rate of a typical county" — the
+   aggregate is pulled up by a handful of large, high-capture counties.
+   POOLED_CAPTURE_RATE below is deliberately the WLS-regression-implied value,
+   not the aggregate, because correction_factor() applies its fallback to
+   arbitrary counties nationally, most of which are small/medium, not large
+   metros — using the aggregate ratio would systematically under-correct
+   exactly the smaller/rural counties this correction is supposed to help.
 
-Consequence: with only 4 calibration states, county density is NOT a reliable basis
-for a national per-county correction on its own — state-level regulatory/market
-factors this project hasn't measured explain most of the variation, and 4 states is
-too few to fit a state-level covariate model. For states with their own calibration
-data (NC, MI, CO, OR), use the state-specific empirical capture rate directly. For
-all other states, this module returns the WLS-regression pooled rate with a wide
-interval derived from the between-state random-effect variance — explicitly wide,
-because that's what an n=4 group sample actually supports.
+Two known data-quality caveats in the calibration states themselves (kept in
+the model rather than silently dropped, since excluding real data without a
+principled statistical reason is its own bias — but flagged clearly):
+
+- **Wisconsin**: WI DOR's "Brewery" permit type sweeps in some non-craft
+  manufacturers (e.g. Anheuser-Busch's Milwaukee plant) that OBDB, being
+  craft-focused, was never going to list. WI's licensee count is ~117% of the
+  Brewers Association's craft-only state total — the reference itself is
+  measuring a broader population than "craft breweries."
+- **Texas**: TABC's public license table is documented (by TABC's own
+  license-consolidation materials) to exclude brewpub subordinate
+  authorizations attached to a retail permit, so TABC's own count
+  undercounts true operating breweries. This is *why* TX's raw
+  obdb_count/licensee_count ratio computes to >100% — not because OBDB
+  over-counts, but because the TX reference itself is incomplete. A capture
+  rate is a fraction of a true population and cannot exceed 1.0 by
+  definition, so correction_factor() clips every rate (calibrated or pooled)
+  at 1.0 — otherwise apply_correction() would divide by >1 and produce a
+  "corrected" estimate *lower* than the raw OBDB count for Texas, inverting
+  the entire purpose of the correction.
+
+Consequence: county density is NOT a reliable basis for a national per-county
+correction on its own — state-level regulatory/market factors this project
+hasn't measured explain most of the variation, and 9 states is still not a lot
+for a state-level covariate model. For states with their own calibration data,
+use the state-specific empirical capture rate directly. For all other states,
+this module returns the WLS-regression pooled rate with a wide interval
+derived from the between-state random-effect variance — explicitly wide,
+because that's what a 9-group sample actually supports.
 """
 
 from __future__ import annotations
@@ -36,21 +56,29 @@ from __future__ import annotations
 import numpy as np
 
 # Empirical OBDB capture rate (obdb_count / licensee_count, pooled across counties)
-# in each calibration state, from build_{nc,mi,co,or}_county_dataset.py.
+# in each calibration state, from build_{state}_county_dataset.py. TX is left
+# unclipped here (1.222) so the raw number is visible/auditable; clipping to
+# <=1.0 happens uniformly in correction_factor() for every state, calibrated
+# or pooled — see the TX caveat above for why the raw value exceeds 1.0.
 CALIBRATED_STATE_CAPTURE_RATES = {
     "NC": 0.618,
     "MI": 0.846,
     "CO": 0.919,
     "OR": 0.930,
+    "WA": 0.830,
+    "TX": 1.222,
+    "GA": 0.476,
+    "WI": 0.615,
+    "PA": 0.486,
 }
 
 # From the WLS fit (weights=licensee_count) in scripts/build_capture_rate_model.py —
 # both drawn from the SAME model so the baseline and the density adjustment are
 # internally consistent (see module docstring point 3 for why this isn't just the
 # raw aggregate ratio).
-POOLED_CAPTURE_RATE = 0.705  # WLS intercept prediction at mean log_density
-LOG_DENSITY_COEF = 0.076  # WLS slope, per unit increase in log(people per sq mi)
-BETWEEN_STATE_LOG_SD = np.sqrt(0.043)  # ~0.207, REML group-variance estimate, 4 groups (unweighted MixedLM; see build script)
+POOLED_CAPTURE_RATE = 0.648  # WLS intercept prediction at mean log_density
+LOG_DENSITY_COEF = 0.047  # WLS slope, per unit increase in log(people per sq mi)
+BETWEEN_STATE_LOG_SD = np.sqrt(0.1045)  # ~0.323, REML group-variance estimate, 9 groups (unweighted MixedLM; see build script)
 
 
 def correction_factor(state: str, log_density: float | None = None) -> dict:
@@ -63,8 +91,13 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
     single national number as more certain than it is.
     """
     if state in CALIBRATED_STATE_CAPTURE_RATES:
+        # min(..., 1.0): a capture rate is a fraction of a true population and
+        # cannot exceed 1.0 by definition. TX's raw value is 1.222 (see module
+        # docstring — TABC's own reference list is documented to be incomplete,
+        # not evidence OBDB over-counts); clip here so apply_correction() never
+        # divides by >1 and inverts the correction direction.
         return {
-            "capture_rate": CALIBRATED_STATE_CAPTURE_RATES[state],
+            "capture_rate": min(CALIBRATED_STATE_CAPTURE_RATES[state], 1.0),
             "source": "calibrated",
             "ci_low": None,
             "ci_high": None,
@@ -92,10 +125,10 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
 
 
 def _mean_log_density() -> float:
-    # Mean log(density) across the 216 calibration-state counties used to fit the
+    # Mean log(density) across the calibration-state counties used to fit the
     # model; centers the density adjustment so the pooled rate applies at the
     # average density rather than at density=1/sqmi.
-    return 4.335  # ~76 people/sqmi, from data/processed/pooled_calibration_with_density.csv
+    return 4.612  # ~101 people/sqmi, from data/processed/pooled_calibration_with_density.parquet
 
 
 def apply_correction(obdb_count: int, state: str, log_density: float | None = None) -> dict:

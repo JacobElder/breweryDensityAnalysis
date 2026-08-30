@@ -1,11 +1,26 @@
-"""Fit the OBDB coverage-correction model on the four calibration states.
+"""Fit the OBDB coverage-correction model on the calibration states.
 
-Pools NC/MI/CO/OR county-level (obdb_count, licensee_count, population density)
-data, fits a fixed-effects and a random-intercept (state) log-capture-ratio model,
-and writes the pooled dataset used by src/breweries/capture_rate_model.py.
+Pools county-level (obdb_count, licensee_count, population density) data across
+every state with a validated licensee registry, fits a fixed-effects and a
+random-intercept (state) log-capture-ratio model, and writes the pooled dataset
+used by src/breweries/capture_rate_model.py.
 
-Run this after all four build_{state}_county_dataset.py scripts have produced
-their outputs.
+Run this after all build_{state}_county_dataset.py scripts have produced their
+outputs.
+
+Known caveat — Wisconsin: WI DOR's "Brewery" permit type sweeps in some
+non-craft manufacturers (e.g. Anheuser-Busch's Milwaukee macro plant) that
+OBDB, being craft-focused, was never going to list — WI's raw capture rate
+comes out at 116.6% (more OBDB entries matched than the "true" licensee count
+in some counties would suggest is possible), which is really a measurement
+mismatch in the licensee source, not evidence OBDB over-counts. WI is kept in
+the pooled model (excluding it without a principled reason would be
+cherry-picking) but this is flagged here and in the methods memo — if the
+between-state variance or pooled rate looks sensitive to WI's inclusion,
+that's the reason, not a modeling bug. Mississippi has no known bulk
+open-data source (checked: no state open-data portal, only an interactive
+per-record search tool that this project's rules already forbid scripting
+around) and is not a calibration state.
 """
 
 from __future__ import annotations
@@ -21,8 +36,16 @@ STATE_LICENSEE_COL = {
     "MI": "lara_permit_count",
     "CO": "liquor_count",
     "OR": "olcc_primary_count",
+    "WA": "liquor_count",
+    "TX": "liquor_count",
+    "GA": "liquor_count",
+    "WI": "liquor_count",
+    "PA": "liquor_count",
 }
-STATE_FIPS = {"NC": "37", "MI": "26", "CO": "08", "OR": "41"}
+STATE_FIPS = {
+    "NC": "37", "MI": "26", "CO": "08", "OR": "41",
+    "WA": "53", "TX": "48", "GA": "13", "WI": "55", "PA": "42",
+}
 
 
 def load_pooled_counties() -> pd.DataFrame:

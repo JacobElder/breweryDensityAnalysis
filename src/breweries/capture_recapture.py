@@ -23,7 +23,7 @@ from rapidfuzz import fuzz
 EARTH_RADIUS_M = 6_371_000
 
 _SUFFIX_RE = re.compile(
-    r"\b(brewing( company| co)?|brewery|beer( co)?|ales?|taproom|llc|inc|co\.?)\b",
+    r"\b(brewing( company| co)?|brewery|beer( company| co)?|company|ales?|taproom|llc|inc|co\.?)\b",
     re.IGNORECASE,
 )
 _PUNCT_RE = re.compile(r"[^a-z0-9\s]")
@@ -53,7 +53,7 @@ def match_records(
     """Greedy nearest-then-best-name-match pairing within max_distance_m.
 
     Each row in df_a is matched to at most one row in df_b, and vice versa.
-    Returns one row per df_a record with the matched df_b index (or NaN) and
+    Returns one row per df_a record with the matched df_b index (-1 if unmatched) and
     the match name-similarity score, so match quality can be inspected/audited
     rather than trusted blindly.
     """

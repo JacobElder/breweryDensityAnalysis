@@ -29,11 +29,11 @@ def fit_poisson_gamma(counts: np.ndarray, exposures: np.ndarray) -> tuple[float,
             f"({int((n <= 0).sum())} of {len(n)} rows have exposure <= 0); "
             "y/n is undefined for zero exposure. Filter these rows before fitting."
         )
-    mu = y.sum() / n.sum()
-
     N = len(y)
     if N < 2:
         raise ValueError("fit_poisson_gamma: need at least 2 units to estimate between-unit variance.")
+
+    mu = y.sum() / n.sum()
     numerator = (n * (y / n - mu) ** 2).sum() - (N - 1) * mu
     denominator = n.sum() - (n ** 2).sum() / n.sum()
     sigma2 = numerator / denominator
