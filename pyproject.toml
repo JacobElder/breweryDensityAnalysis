@@ -1,0 +1,27 @@
+[project]
+name = "brewery-density-analysis"
+version = "0.1.0"
+description = "US brewery density analysis: ranking geographies and modeling residual density after covariates"
+requires-python = ">=3.12"
+dependencies = [
+    "geopandas>=1.1.4",
+    "mapclassify>=2.11.0",
+    "matplotlib>=3.11.1",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.5",
+    "pyarrow>=25.0.1",
+    "pyproj>=3.7.2",
+    "python-dotenv>=1.2.3",
+    "rapidfuzz>=3.14.5",
+    "requests>=2.34.2",
+    "scipy>=1.18.1",
+    "shapely>=2.1.2",
+    "statsmodels>=0.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/breweries"]
