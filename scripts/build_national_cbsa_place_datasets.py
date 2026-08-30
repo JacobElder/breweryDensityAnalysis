@@ -13,7 +13,7 @@ from breweries.sources.acs import AGE_VARS
 
 
 def build_cbsa() -> pd.DataFrame:
-    geocoded = pd.read_csv("data/processed/obdb_us_geocoded.csv", dtype={"cbsa_geoid": str})
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
     geocoded = geocoded.dropna(subset=["cbsa_geoid"])
     geocoded["cbsa_geoid"] = geocoded["cbsa_geoid"].str.split(".").str[0].str.zfill(5)
     counts = geocoded.groupby("cbsa_geoid").size().rename("obdb_count")
@@ -35,12 +35,12 @@ def build_cbsa() -> pd.DataFrame:
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
 
     df = shrink_rates(df, "obdb_count", "adults_21plus")
-    df.to_csv("data/processed/us_cbsa_analysis.csv", index=False)
+    df.to_parquet("data/processed/us_cbsa_analysis.parquet", index=False)
     return df
 
 
 def build_place() -> pd.DataFrame:
-    geocoded = pd.read_csv("data/processed/obdb_us_geocoded.csv", dtype={"place_geoid": str})
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
     geocoded = geocoded.dropna(subset=["place_geoid"])
     geocoded["place_geoid"] = geocoded["place_geoid"].str.split(".").str[0].str.zfill(7)
     counts = geocoded.groupby("place_geoid").size().rename("obdb_count")
@@ -57,7 +57,7 @@ def build_place() -> pd.DataFrame:
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
 
     df = shrink_rates(df, "obdb_count", "adults_21plus")
-    df.to_csv("data/processed/us_place_analysis.csv", index=False)
+    df.to_parquet("data/processed/us_place_analysis.parquet", index=False)
     return df
 
 

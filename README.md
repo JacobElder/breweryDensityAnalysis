@@ -30,10 +30,17 @@ https://api.census.gov/data/key_signup.html.
   `census_geocoder.py`, `manifest.py`)
 - `scripts/` — one-off assembly scripts per geographic slice (e.g.
   `build_nc_county_dataset.py`)
-- `data/raw/` — cached source pulls, timestamped, never re-fetched automatically
+- `data/raw/` — cached source pulls, timestamped, never re-fetched automatically.
+  TIGER/Line geometry is cached as GeoParquet (brotli-compressed) rather than
+  the zipped shapefiles Census serves — `src/breweries/sources/tiger.py`
+  downloads-and-converts in memory, so no `.zip` ever touches disk. Everything
+  else in `data/processed/` is Parquet too (`nc_obdb_osm_match.csv`, a one-off
+  manual-audit diagnostic, is the only deliberate exception — CSV stays more
+  directly inspectable for that use).
 - `data/raw/manifest.jsonl` — append-only log of every fetch and every
   row-dropping filter (before/after counts)
-- `data/processed/` — analysis-ready datasets
+- `data/processed/` — analysis-ready datasets (Parquet) and rendered outputs
+  (choropleth PNGs, top-50 table PNG)
 
 ## Status
 

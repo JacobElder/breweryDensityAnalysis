@@ -12,11 +12,11 @@ import glob
 from datetime import datetime, timezone
 from pathlib import Path
 
-import geopandas as gpd
 import pandas as pd
 
 from breweries.census_client import ACS5_YEAR, get
 from breweries.manifest import log_fetch
+from breweries.sources import tiger
 
 RAW_DIR = Path("data/raw/covariates")
 NAICS_ACCOMMODATION = "721"
@@ -96,8 +96,7 @@ def load_county_covariates() -> pd.DataFrame:
 
 
 def _load_density() -> pd.DataFrame:
-    county_zip = sorted(glob.glob("data/raw/tiger/us_county_*.zip"))[-1]
-    counties = gpd.read_file(f"zip://{county_zip}")[["GEOID", "ALAND"]]
+    counties = tiger.load_counties()[["GEOID", "ALAND"]]
     counties = counties.rename(columns={"GEOID": "county_geoid"})
     counties["sqmi"] = counties["ALAND"] / 2_589_988
     return counties[["county_geoid", "sqmi"]]

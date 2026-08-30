@@ -22,7 +22,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
     df = obdb.apply_inclusion_rule(df, "CO")
     df = fill_missing_coords(df, "id", "latitude", "longitude", "address_1", "city",
                               "state_province", "postal_code", "obdb_co")
-    geo = assign_geographies(df, "latitude", "longitude", "08", "co_place_*.zip", "obdb_co")
+    geo = assign_geographies(df, "latitude", "longitude", "CO", "obdb_co")
     counts = geo.groupby("county_name", dropna=True).size().rename("obdb_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -30,7 +30,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
 
 def build_osm_county_counts() -> pd.DataFrame:
     df = osm.load_state("CO")
-    geo = assign_geographies(df, "lat", "lon", "08", "co_place_*.zip", "osm_co")
+    geo = assign_geographies(df, "lat", "lon", "CO", "osm_co")
     counts = geo.groupby("county_name", dropna=True).size().rename("osm_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -50,7 +50,7 @@ def build_acs_county_denominators() -> pd.DataFrame:
 
 def build_liquor_county_counts() -> pd.DataFrame:
     df = co_liquor.load()
-    geo = assign_geographies(df, "lat", "lon", "08", "co_place_*.zip", "co_liquor")
+    geo = assign_geographies(df, "lat", "lon", "CO", "co_liquor")
     counts = geo.groupby("county_name", dropna=True).size().rename("liquor_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -73,9 +73,9 @@ def main() -> None:
 
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
 
-    out_path = Path("data/processed/co_county_analysis.csv")
+    out_path = Path("data/processed/co_county_analysis.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_path, index=False)
+    df.to_parquet(out_path, index=False)
 
     print(f"\nWrote {out_path} ({len(df)} counties)\n")
 

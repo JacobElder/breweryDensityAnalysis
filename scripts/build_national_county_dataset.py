@@ -17,7 +17,7 @@ FIPS_TO_ABBR = {v: k for k, v in STATE_FIPS_ALL.items()}
 
 
 def main() -> None:
-    geocoded = pd.read_csv("data/processed/obdb_us_geocoded.csv", dtype={"county_geoid": str})
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
     geocoded["county_geoid"] = geocoded["county_geoid"].str.zfill(5)
     counts = geocoded.dropna(subset=["county_geoid"]).groupby("county_geoid").size().rename("obdb_count")
 
@@ -54,8 +54,8 @@ def main() -> None:
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
     df["corrected_rate_per_100k_21plus"] = df["obdb_corrected"] / df["adults_21plus"] * 100_000
 
-    out_path = Path("data/processed/us_county_analysis.csv")
-    df.to_csv(out_path, index=False)
+    out_path = Path("data/processed/us_county_analysis.parquet")
+    df.to_parquet(out_path, index=False)
     print(f"Wrote {out_path} ({len(df)} counties)")
     print(f"Missing covariates: income={df['median_household_income'].isna().sum()}, "
           f"age={df['median_age'].isna().sum()}, density={df['density_per_sqmi'].isna().sum()}")

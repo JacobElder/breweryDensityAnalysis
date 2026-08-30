@@ -7,7 +7,6 @@ rather than reloaded 51 times.
 
 from __future__ import annotations
 
-import glob
 import time
 
 import geopandas as gpd
@@ -15,16 +14,15 @@ import pandas as pd
 
 from breweries.census_geocoder import geocode_addresses
 from breweries.manifest import log_filter
-from breweries.sources import obdb
+from breweries.sources import obdb, tiger
 from breweries.state_fips import STATE_FIPS_ALL, STATE_NAME_TO_ABBR
 
 pd.set_option("display.width", 160)
 
 
 def load_national_counties() -> gpd.GeoDataFrame:
-    county_zip = sorted(glob.glob("data/raw/tiger/us_county_*.zip"))[-1]
-    gdf = gpd.read_file(f"zip://{county_zip}")
-    return gdf.to_crs(epsg=4326)[["STATEFP", "GEOID", "NAME", "CBSAFP", "geometry"]].rename(
+    gdf = tiger.load_counties()
+    return gdf[["STATEFP", "GEOID", "NAME", "CBSAFP", "geometry"]].rename(
         columns={"GEOID": "county_geoid", "NAME": "county_name", "CBSAFP": "cbsa_geoid"}
     )
 
@@ -44,8 +42,7 @@ def geocode_state(df_state: pd.DataFrame, state_abbr: str, counties_national: gp
     counties = counties_national[counties_national["STATEFP"] == fips]
     joined = gpd.sjoin(points, counties.drop(columns="STATEFP"), how="left", predicate="within").drop(columns="index_right")
 
-    place_files = sorted(glob.glob(f"data/raw/tiger/{state_abbr.lower()}_place_*.zip"))
-    places = gpd.read_file(f"zip://{place_files[-1]}").to_crs(epsg=4326)
+    places = tiger.load_place(state_abbr)
     places = places[["GEOID", "NAME", "geometry"]].rename(columns={"GEOID": "place_geoid", "NAME": "place_name"})
     joined = gpd.sjoin(joined, places, how="left", predicate="within").drop(columns="index_right")
 
@@ -96,12 +93,12 @@ def main() -> None:
               f"{geo['county_geoid'].notna().sum()} matched ({time.time()-t0:.0f}s elapsed)")
 
     national = pd.concat(results, ignore_index=True)
-    national.to_csv("data/processed/obdb_us_geocoded.csv", index=False)
+    national.to_parquet("data/processed/obdb_us_geocoded.parquet", index=False)
 
     match_rate = national["county_geoid"].notna().mean()
     print(f"\nTotal: {len(national)} records, {national['county_geoid'].notna().sum()} matched "
           f"({match_rate:.2%})")
-    print("Wrote data/processed/obdb_us_geocoded.csv")
+    print("Wrote data/processed/obdb_us_geocoded.parquet")
 
 
 if __name__ == "__main__":

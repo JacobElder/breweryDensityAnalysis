@@ -1,7 +1,7 @@
 """Assemble the NC county-level analysis dataset and run validation checkpoints 1-3.
 
 Vertical slice per the project handoff: get one state working end to end before
-scaling nationally. Outputs data/processed/nc_county_analysis.csv and prints the
+scaling nationally. Outputs data/processed/nc_county_analysis.parquet and prints the
 face-validity, state-rollup, and cross-source-agreement checkpoints.
 """
 
@@ -23,7 +23,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
     df = obdb.apply_inclusion_rule(df, "NC")
     df = fill_missing_coords(df, "id", "latitude", "longitude", "address_1", "city",
                               "state_province", "postal_code", "obdb_nc")
-    geo = assign_geographies(df, "latitude", "longitude", "37", "nc_place_*.zip", "obdb_nc")
+    geo = assign_geographies(df, "latitude", "longitude", "NC", "obdb_nc")
     counts = geo.groupby("county_name", dropna=True).size().rename("obdb_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -31,7 +31,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
 
 def build_osm_county_counts() -> pd.DataFrame:
     df = osm.load_state("NC")
-    geo = assign_geographies(df, "lat", "lon", "37", "nc_place_*.zip", "osm_nc")
+    geo = assign_geographies(df, "lat", "lon", "NC", "osm_nc")
     counts = geo.groupby("county_name", dropna=True).size().rename("osm_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -76,9 +76,9 @@ def main() -> None:
 
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
 
-    out_path = Path("data/processed/nc_county_analysis.csv")
+    out_path = Path("data/processed/nc_county_analysis.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_path, index=False)
+    df.to_parquet(out_path, index=False)
 
     print(f"\nWrote {out_path} ({len(df)} counties)\n")
 

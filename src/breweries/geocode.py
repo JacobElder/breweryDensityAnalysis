@@ -3,42 +3,21 @@
 No paid geocoding APIs. Uses the lat/lon already present in OBDB and OSM records,
 falling back to the free Census Geocoder for records with a street address but no
 coordinates (see census_geocoder.py), then joins all points against Census
-TIGER/Line polygons with geopandas. CBSA is derived from the county's CBSAFP
-attribute (the TIGER county layer already carries this), not a separate spatial
-join, since CBSAs are exact aggregates of counties.
+TIGER/Line polygons (src/breweries/sources/tiger.py) with geopandas. CBSA is
+derived from the county's CBSAFP attribute (the TIGER county layer already
+carries this), not a separate spatial join, since CBSAs are exact aggregates
+of counties.
 """
 
 from __future__ import annotations
-
-import glob
-from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
 
 from breweries.census_geocoder import geocode_addresses
 from breweries.manifest import log_filter
-
-TIGER_DIR = Path("data/raw/tiger")
-
-
-def _latest(pattern: str) -> Path:
-    matches = sorted(glob.glob(str(TIGER_DIR / pattern)))
-    if not matches:
-        raise FileNotFoundError(f"No cached TIGER file matching {pattern} in {TIGER_DIR}")
-    return Path(matches[-1])
-
-
-def load_counties(state_fips: str | None = None) -> gpd.GeoDataFrame:
-    gdf = gpd.read_file(f"zip://{_latest('us_county_*.zip')}")
-    if state_fips:
-        gdf = gdf[gdf["STATEFP"] == state_fips]
-    return gdf.to_crs(epsg=4326)
-
-
-def load_places(state_zip_pattern: str) -> gpd.GeoDataFrame:
-    gdf = gpd.read_file(f"zip://{_latest(state_zip_pattern)}")
-    return gdf.to_crs(epsg=4326)
+from breweries.sources import tiger
+from breweries.state_fips import STATE_FIPS_ALL
 
 
 def fill_missing_coords(
@@ -74,8 +53,7 @@ def assign_geographies(
     df: pd.DataFrame,
     lat_col: str,
     lon_col: str,
-    state_fips: str,
-    place_zip_pattern: str,
+    state_abbr: str,
     source_label: str,
 ) -> gpd.GeoDataFrame:
     """Spatial-join a brewery DataFrame to county, place, and (derived) CBSA.
@@ -95,12 +73,13 @@ def assign_geographies(
         crs="EPSG:4326",
     )
 
-    counties = load_counties(state_fips)[["GEOID", "NAME", "CBSAFP", "geometry"]].rename(
+    state_fips = STATE_FIPS_ALL[state_abbr]
+    counties = tiger.load_counties(state_fips)[["GEOID", "NAME", "CBSAFP", "geometry"]].rename(
         columns={"GEOID": "county_geoid", "NAME": "county_name", "CBSAFP": "cbsa_geoid"}
     )
     joined = gpd.sjoin(points, counties, how="left", predicate="within").drop(columns="index_right")
 
-    places = load_places(place_zip_pattern)[["GEOID", "NAME", "geometry"]].rename(
+    places = tiger.load_place(state_abbr)[["GEOID", "NAME", "geometry"]].rename(
         columns={"GEOID": "place_geoid", "NAME": "place_name"}
     )
     joined = gpd.sjoin(joined, places, how="left", predicate="within").drop(columns="index_right")

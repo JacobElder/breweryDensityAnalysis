@@ -24,7 +24,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
     df = obdb.apply_inclusion_rule(df, "OR")
     df = fill_missing_coords(df, "id", "latitude", "longitude", "address_1", "city",
                               "state_province", "postal_code", "obdb_or")
-    geo = assign_geographies(df, "latitude", "longitude", "41", "or_place_*.zip", "obdb_or")
+    geo = assign_geographies(df, "latitude", "longitude", "OR", "obdb_or")
     counts = geo.groupby("county_name", dropna=True).size().rename("obdb_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -32,7 +32,7 @@ def build_obdb_county_counts() -> pd.DataFrame:
 
 def build_osm_county_counts() -> pd.DataFrame:
     df = osm.load_state("OR")
-    geo = assign_geographies(df, "lat", "lon", "41", "or_place_*.zip", "osm_or")
+    geo = assign_geographies(df, "lat", "lon", "OR", "osm_or")
     counts = geo.groupby("county_name", dropna=True).size().rename("osm_count").reset_index()
     counts["county_name"] = counts["county_name"].str.replace(" County", "", regex=False)
     return counts
@@ -71,9 +71,9 @@ def main() -> None:
 
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
 
-    out_path = Path("data/processed/or_county_analysis.csv")
+    out_path = Path("data/processed/or_county_analysis.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_path, index=False)
+    df.to_parquet(out_path, index=False)
 
     print(f"\nWrote {out_path} ({len(df)} counties)\n")
 

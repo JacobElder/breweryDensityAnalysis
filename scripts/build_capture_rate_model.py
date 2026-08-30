@@ -10,12 +10,11 @@ their outputs.
 
 from __future__ import annotations
 
-import glob
-
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
+
+from breweries.sources import tiger
 
 STATE_LICENSEE_COL = {
     "NC": "abc_permit_count",
@@ -29,7 +28,7 @@ STATE_FIPS = {"NC": "37", "MI": "26", "CO": "08", "OR": "41"}
 def load_pooled_counties() -> pd.DataFrame:
     frames = []
     for state, col in STATE_LICENSEE_COL.items():
-        df = pd.read_csv(f"data/processed/{state.lower()}_county_analysis.csv")
+        df = pd.read_parquet(f"data/processed/{state.lower()}_county_analysis.parquet")
         df = df.rename(columns={col: "licensee_count"})
         df["state"] = state
         frames.append(df[["county_name", "state", "obdb_count", "licensee_count",
@@ -38,8 +37,7 @@ def load_pooled_counties() -> pd.DataFrame:
 
 
 def load_land_area() -> pd.DataFrame:
-    county_zip = sorted(glob.glob("data/raw/tiger/us_county_*.zip"))[-1]
-    counties = gpd.read_file(f"zip://{county_zip}")[["STATEFP", "NAME", "ALAND"]]
+    counties = tiger.load_counties()[["STATEFP", "NAME", "ALAND"]]
     fips_to_state = {v: k for k, v in STATE_FIPS.items()}
     counties = counties[counties["STATEFP"].isin(fips_to_state)].copy()
     counties["state"] = counties["STATEFP"].map(fips_to_state)
@@ -90,8 +88,8 @@ def main() -> None:
     print(f"\nPooled capture rate across 4 states: {overall:.1%}")
     print(f"Mean log_density across model counties: {model_df['log_density'].mean():.4f}")
 
-    df.to_csv("data/processed/pooled_calibration_with_density.csv", index=False)
-    print("\nWrote data/processed/pooled_calibration_with_density.csv")
+    df.to_parquet("data/processed/pooled_calibration_with_density.parquet", index=False)
+    print("\nWrote data/processed/pooled_calibration_with_density.parquet")
 
 
 if __name__ == "__main__":

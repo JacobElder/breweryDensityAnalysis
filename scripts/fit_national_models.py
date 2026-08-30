@@ -67,7 +67,7 @@ def fit_covariate_residual_model(df: pd.DataFrame) -> tuple[pd.DataFrame, object
 
 
 def main() -> None:
-    df = pd.read_csv("data/processed/us_county_analysis.csv")
+    df = pd.read_parquet("data/processed/us_county_analysis.parquet")
 
     print("=" * 70)
     print("MODEL A: Empirical Bayes Poisson-Gamma shrinkage (no covariates)")
@@ -81,8 +81,8 @@ def main() -> None:
                   "obdb_rate_per_100k_21plus", "eb_posterior_rate_per_100k",
                   "eb_ci_low_per_100k", "eb_ci_high_per_100k"]].head(20).to_string(index=False))
 
-    df_eb.to_csv("data/processed/us_county_shrunken_rankings.csv", index=False)
-    print("\nWrote data/processed/us_county_shrunken_rankings.csv")
+    df_eb.to_parquet("data/processed/us_county_shrunken_rankings.parquet", index=False)
+    print("\nWrote data/processed/us_county_shrunken_rankings.parquet")
 
     print("\n" + "=" * 70)
     print("MODEL B: NB-GLM with covariates + state FE, ranked by residual")
@@ -108,8 +108,8 @@ def main() -> None:
     print(top_raw[["county_name", "state_abbr", "obdb_count", "expected_count",
                    "residual_ratio"]].head(10).to_string(index=False))
 
-    model_df.to_csv("data/processed/us_county_residual_rankings.csv", index=False)
-    print("\nWrote data/processed/us_county_residual_rankings.csv")
+    model_df.to_parquet("data/processed/us_county_residual_rankings.parquet", index=False)
+    print("\nWrote data/processed/us_county_residual_rankings.parquet")
 
 
 if __name__ == "__main__":
