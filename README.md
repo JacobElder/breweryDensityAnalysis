@@ -73,10 +73,13 @@ OpenStreetMap (Overpass) was fetched for all 50 states + DC as a secondary
 signal — not incorporated into the headline numbers, but used in two
 diagnostics (see Key Findings). Census County Business Patterns (NAICS
 312120) and ACS 5-year (2020-2024) supply denominators and covariates.
-TIGER/Line 2025 supplies county/place/CBSA polygons for geocoding. Nine state
-liquor/ABC/DOR licensee registries — NC, MI, CO, OR, WA, TX, GA, WI, PA —
-supply independent ground truth for calibration (a 10th, Mississippi, was
-investigated and found to have no bulk-downloadable source; see Limitations).
+TIGER/Line 2025 supplies county/place/CBSA polygons for geocoding. Thirteen
+state liquor/ABC/DOR licensee registries — NC, MI, CO, OR, WA, TX, GA, WI, PA,
+IL, CA, NY, VA — supply independent ground truth for calibration. Six more
+states were investigated: MS, OH, VT, and MN have no bulk-downloadable source
+at all; TN, AZ, and SC also lack one but still got a 3-source (OBDB/OSM/CBP)
+county dataset used for face-validity checks rather than the correction
+model. See Limitations for the full accounting.
 
 **Brewery definition.** OBDB `brewery_type` in `{micro, brewpub, regional,
 large, nano}`; excludes `planning`/`closed`, judgment-call categories
@@ -114,11 +117,11 @@ exist for all three levels.
 
 **Coverage calibration.** OBDB is a volunteer-maintained dataset and
 undercounts true breweries by an amount that varies mostly by *state*, not by
-how rural a county is — measured directly against 9 state licensee registries
-(`src/breweries/capture_rate_model.py`). States without their own calibration
-data get a pooled fallback rate from a weighted regression, with a
-deliberately wide uncertainty interval reflecting how little a 9-state sample
-can support. The choropleth and ranking tables are **not**
+how rural a county is — measured directly against 13 state licensee
+registries (`src/breweries/capture_rate_model.py`). States without their own
+calibration data get a pooled fallback rate from a weighted regression, with
+a deliberately wide uncertainty interval reflecting how little a 13-state
+sample can support. The choropleth and ranking tables are **not**
 capture-rate-corrected by default — every number in this project's headline
 outputs is a raw OBDB count/rate unless stated otherwise.
 
@@ -132,21 +135,25 @@ support" section: `docs/methods_memo.md`.
   the single most robust result in the data, and a useful face-validity
   anchor for the whole pipeline.
 - **OBDB's coverage gap is dominated by which state a brewery is in, not how
-  rural the county is — and the range is wider than a 4-state sample
-  suggested.** Measured capture rate across 9 calibration states: GA 48%, PA
-  49%, WI 62% (see caveat below), NC 62%, WA 83%, MI 85%, CO 92%, OR 93%, TX
-  effectively 100% (see caveat below). A regression against local population
-  density found a real but small effect (denser counties are somewhat better
-  covered) — several times smaller than the state-to-state variation.
-  **Two states' "ground truth" itself has a documented quirk, not a pipeline
-  bug**: Wisconsin's DOR brewery-permit category sweeps in some non-craft
-  manufacturers (e.g. Anheuser-Busch's Milwaukee plant), inflating the
-  reference count above the Brewers Association's craft-only total; Texas's
-  TABC public license table is documented by TABC itself to exclude brewpub
-  subordinate authorizations, so its reference *undercounts* — which is why
-  the raw OBDB/TABC ratio computes to 122%. The correction model clips every
-  capture rate at 1.0 (a rate can't legitimately exceed 100% of a true
-  population) rather than let Texas's data quirk invert the correction
+  rural the county is — and the range keeps widening as more states are
+  added.** Measured capture rate across 13 calibration states: VA 46%, GA
+  48%, PA 49%, CA 60%, WI 62%, NC 62%, NY 66%, WA 83%, MI 85%, CO 92%, OR
+  93%, and IL/TX effectively 100% (see caveat below). A regression against
+  local population density found a real but small effect (denser counties
+  are somewhat better covered) — several times smaller than the
+  state-to-state variation. **Four states' "ground truth" itself has a
+  documented quirk, not a pipeline bug**, all inflating the reference count
+  above what OBDB could ever match: Wisconsin's DOR brewery-permit category
+  sweeps in some non-craft manufacturers (e.g. Anheuser-Busch's Milwaukee
+  plant); California's and Virginia's ABC exports count *licenses*/premises
+  rather than brands, and several operators hold multiple licenses per
+  brand (satellite tasting rooms, alternating proprietorships); Illinois's
+  export is cumulative with companion license classes that can double-list
+  one site. Texas is the inverse case — its TABC public license table is
+  documented by TABC itself to exclude brewpub subordinate authorizations,
+  so its reference *undercounts*. The correction model clips every capture
+  rate at 1.0 (a rate can't legitimately exceed 100% of a true population)
+  rather than let any of these four data quirks invert the correction
   direction.
 - **Geographic unit choice changes who's on the list.** Grand Rapids, MI and
   Traverse City, MI both fail to reach the county-level top 20 (Kent County's
@@ -210,14 +217,34 @@ support" section: `docs/methods_memo.md`.
   be read as candidates for review, not a validated correction — see
   Limitations.
 
+- **Two of Model B's flagged residual counties got an independent ground-truth
+  check from the state-expansion round, with different results.** Virginia's
+  ABC data confirms Richmond city genuinely has an outsized brewery count
+  relative to its population (10.2 raw rate per 100k, correctly kept
+  separate from the much larger, rural Richmond *County* — Virginia's
+  independent cities share a name with a same-named county in four cases,
+  which required a join-key fix during this integration to avoid silently
+  dropping those counties' data). South Carolina has no state licensee
+  source, but its OBDB brewery count for Charleston (24) matches CBP's
+  independently-collected federal establishment count exactly — suggesting
+  Charleston's raw count is not inflated, even though the LOSO validation
+  above already showed its *residual* ranking (i.e., relative to
+  covariate-predicted expectation) is one of the less stable ones.
+
 ## Known limitations and possible next steps
 
-- **Mississippi has no known bulk brewery/alcohol-license open-data
-  source.** Checked thoroughly: no state open-data portal, DOR pages
-  describe the license categories but publish no roster, and the only public
-  lookup is a session-based interactive search tool this project's rules
-  don't permit scripting around (the same standard already applied to NC's
-  individual-permit search). A legitimate "no" — not a gap in effort.
+- **Six more states were investigated and found to have no bulk
+  brewery/alcohol-license open-data source**: Mississippi, Ohio, Vermont,
+  and Minnesota have no usable source at all (checked thoroughly — no state
+  open-data portal, only an interactive per-record search tool this
+  project's rules don't permit scripting around). Tennessee, Arizona, and
+  South Carolina are structurally different: Tennessee's ABC doesn't
+  regulate ordinary beer at all (it's licensed locally, city-by-city, with
+  no state roll-up); Arizona's and South Carolina's licensing agencies have
+  no bulk export, only session-gated interactive lookups. All three still
+  got a 3-source (OBDB/OSM/CBP) county dataset built and used for
+  face-validity checks (see above), just not folded into the correction
+  model, which needs the 4th independent leg to mean anything.
 - **The OBDB/OSM union candidate checker (`build_obdb_osm_union.py`) needs
   further work before its output can inform any correction.** Two real bugs
   were found and fixed during development (missing OBDB geocoding before
@@ -248,7 +275,7 @@ support" section: `docs/methods_memo.md`.
   the top of this file) but only at county and CBSA level — place-level
   toggle and a search-by-name box would make it more useful for looking up
   a specific city rather than exploring visually.
-- **No automated CI** — the 66-test pytest suite (`tests/`) exists and
+- **No automated CI** — the 70-test pytest suite (`tests/`) exists and
   passes but isn't wired into a CI pipeline; a bug could still land on `main`
   without the suite being run.
 
@@ -256,11 +283,11 @@ support" section: `docs/methods_memo.md`.
 
 This codebase went through a 4-agent parallel correctness audit (statistical
 modeling, data-source pipeline, build/analysis scripts, documentation), a
-follow-up manual review, and — after expanding to 10 calibration states — a
-second round of agent-driven work (6 more parallel agents: 3 new calibration
-states, a pytest suite, LOSO validation, CBSA/place tables, plus a
-multi-source capture model investigation and an OBDB/OSM union checker built
-directly). Real bugs caught across both rounds:
+follow-up manual review, a second round of agent-driven work (6 parallel
+agents: 3 new calibration states, a pytest suite, LOSO validation, CBSA/place
+tables, plus a multi-source capture model investigation and an OBDB/OSM
+union checker), and a third round adding 4 more calibration states (IL, CA,
+NY, VA) out of 10 investigated. Real bugs caught across all three rounds:
 
 - A normal-approximation confidence interval on a skewed Gamma posterior that
   materially understated uncertainty for low-count counties/places (now
@@ -283,3 +310,18 @@ directly). Real bugs caught across both rounds:
   matches) and a `Boulder County County, CO`-style double-suffix bug in an
   early draft of the top-50 table, both caught by direct verification before
   publishing.
+- `census_geocoder.py`'s batch geocoding crashed with a `KeyError` whenever
+  an entire address batch came back with zero matches (a real case: 3 rural
+  New York addresses that Census's own geocoder can't resolve) — the
+  coordinates column has no comma to split on when every row is `No_Match`,
+  so the second column silently doesn't exist. Found while adding New York
+  as a calibration state; fixed to reindex the split result so both columns
+  always exist regardless of match rate.
+- Virginia's independent cities (Fairfax, Franklin, Richmond, Roanoke each
+  have both a same-named city and county) collide under TIGER's bare county
+  name — the capture-rate model's land-area join used the bare name for
+  every state, which would have silently failed to match 8 Virginia
+  county/city rows (dropping them from the correction model with no error)
+  because Virginia's own data uses the "city"/"County"-suffixed name to
+  disambiguate. Fixed by joining against both the bare name and the full
+  TIGER `NAMELSAD` for every state, rather than picking one convention.

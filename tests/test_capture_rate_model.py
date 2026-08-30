@@ -153,10 +153,17 @@ class TestDensityClipRegression:
         assert result["ci_low"] >= 0.0
 
     def test_manhattan_like_density_from_real_data_is_clipped(self):
-        # Manhattan-scale density (~72,000 people/sq mi, i.e. the densest
-        # real US counties) should not produce a >1.0 "capture rate".
+        # Manhattan-scale density (~72,000 people/sq mi, i.e. the densest real
+        # US counties) should not produce a >1.0 "capture rate" for a state
+        # going through the pooled-extrapolation path. Deliberately NOT "NY"
+        # here: New York is itself a calibrated state (and Manhattan is the
+        # real-world example of this density), so passing "NY" would exercise
+        # the calibrated branch (ci_high=None) instead of the clip logic this
+        # test targets -- use an uncalibrated state so the density-driven
+        # extrapolation path is what's actually under test.
+        assert "NJ" not in CALIBRATED_STATE_CAPTURE_RATES
         manhattan_log_density = np.log(72_000)
-        result = correction_factor("NY", log_density=manhattan_log_density)
+        result = correction_factor("NJ", log_density=manhattan_log_density)
         assert result["capture_rate"] <= 1.0
         assert result["capture_rate"] >= 0.0
         assert result["ci_high"] <= 1.0

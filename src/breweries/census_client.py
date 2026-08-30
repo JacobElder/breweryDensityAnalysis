@@ -21,6 +21,16 @@ STATE_FIPS = {
     "WI": "55",
     "PA": "42",
     "MS": "28",
+    "CA": "06",
+    "NY": "36",
+    "VA": "51",
+    "OH": "39",
+    "IL": "17",
+    "VT": "50",
+    "TN": "47",
+    "AZ": "04",
+    "MN": "27",
+    "SC": "45",
 }
 
 CBP_YEAR = 2023  # latest available CBP vintage as of this pipeline (verified via api.census.gov/data.json)

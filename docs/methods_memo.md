@@ -86,6 +86,17 @@ Deschutes/Bend, Buncombe/Asheville, Larimer-or-CBSA/Fort Collins, and Boulder
 appear at every level. That consistency is itself informative — it's a check
 this pipeline is not obviously broken, not a claim of definitive precision.
 
+Two more national-ranking cases got direct, independent confirmation during
+the state-expansion rounds rather than remaining unverified: Flagstaff
+(Coconino County, AZ) — a national top-20 per-capita result — was confirmed
+by all three independent sources available for Arizona (OBDB=12, OSM=9,
+CBP=5, all agreeing there's a real cluster, not a single-source artifact) at
+nearly 3x the state's second-place county. Richmond city, VA — flagged by
+Model B's residual ranking (Section 9) — was confirmed to have a genuinely
+outsized raw rate (10.2 per 100k adults 21+) once Virginia's own ABC data
+was available, correctly distinct from the much larger, rural Richmond
+*County* it shares a bare TIGER name with.
+
 ## 5. Coverage error — the honest section
 
 This is the deliverable the source-availability constraints (Section 8) make
@@ -93,21 +104,29 @@ necessary: **every brewery count in this project is an estimate from an
 incomplete source, and the size of that gap varies by state in a way that a
 single national correction factor cannot fix.**
 
-### 5.1 Nine-state calibration
+### 5.1 Thirteen-state calibration
 
 State licensee/permit registries were obtained for NC (ABC Commission), MI
 (LARA Master License List), CO (Socrata open-data liquor licenses), OR (OLCC
 Socrata liquor licenses), WA (WSLCB bulk licensee export), TX (TABC Socrata
 license table), GA (Dept. of Revenue bulk Excel export), WI (DOR Fermented
-Malt Beverage Permits Excel export), and PA (PLCB bulk CSV export) — see
+Malt Beverage Permits Excel export), PA (PLCB bulk CSV export), IL (ILCC
+daily bulk CSV export), CA (ABC daily bulk CSV export), NY (SLA Socrata
+dataset), and VA (ABC bulk Excel export) — see
 `src/breweries/sources/{nc_abc,mi_lara,co_liquor,or_olcc,wa_liquor,tx_liquor,
-ga_dor,wi_dor,pa_liquor}.py`. Mississippi was investigated and found to have
-no bulk-downloadable source (only an interactive per-record search tool,
-which this project's rules do not permit scripting around — see Section 8).
+ga_dor,wi_dor,pa_liquor,il_liquor,ca_abc,ny_sla,va_abc}.py`.
 
-Seven of nine track the Brewers Association's own 2025 state totals within
-1-9%; two (WI, PA) sit further off for documented, source-specific reasons
-noted below the table, not pipeline error:
+Six more states were investigated and found to have no usable path to a
+calibration-quality registry (see Section 8 for the full accounting):
+Mississippi, Ohio, Vermont, and Minnesota have no bulk-downloadable source at
+all. Tennessee, Arizona, and South Carolina also lack one, but still
+contribute a 3-source (OBDB/OSM/CBP) county dataset used for face-validity
+spot-checks elsewhere in this memo — not for the correction model, since that
+needs the 4th independent leg to be meaningful.
+
+Nine of thirteen track the Brewers Association's own 2025 state totals within
+1-9%; four (WI, PA, CA, VA) sit further off for documented, source-specific
+reasons noted below the table, not pipeline error:
 
 | State | Licensee count | BA 2025 total | Licensee/BA |
 |---|---|---|---|
@@ -120,6 +139,10 @@ noted below the table, not pipeline error:
 | GA | 147 | 186 | 79% |
 | WI | 288 | 247 | 117% |
 | PA | 591 | 538 | 110% |
+| IL | 175 | 288 | 61% |
+| CA | 1,270 | 939 | 135% |
+| NY | 495 | 525 | 94% |
+| VA | 413 | 344 | 120% |
 
 - **TX (44%)**: TABC's public license table is documented (by TABC's own
   license-consolidation materials) to exclude brewpub subordinate
@@ -132,34 +155,62 @@ noted below the table, not pipeline error:
 - **PA (110%)**: plausibly BA's own count lagging recent openings/closures,
   similar to the pattern in other license-based states, but not independently
   confirmed beyond that hypothesis.
+- **CA (135%)**: ABC's export counts *licenses*, and 216 distinct licensees
+  hold more than one Type 01/23/75 license (386 "extra" licenses beyond
+  one-per-company — e.g. Firestone Walker holds 17), plus some Type-01
+  holders are large non-craft operations (e.g. wineries with an incidental
+  beer-manufacturer license) that BA's craft definition excludes.
+- **VA (120%)**: ABC's export similarly counts licensed premises rather than
+  brands; several operators hold multiple Virginia sites (one holds 5).
 
-Against this anchor, OBDB's capture rate (obdb_count / licensee_count) varies
-even more than the original 4-state sample suggested:
+Against this anchor, OBDB's capture rate (obdb_count / licensee_count) keeps
+widening as more states are added, not narrowing:
 
 | State | OBDB capture rate |
 |---|---|
+| VA | 46% |
 | GA | 48% |
 | PA | 49% |
+| CA | 60%* |
 | WI | 62%* |
 | NC | 62% |
+| NY | 66% |
 | WA | 83% |
 | MI | 85% |
 | CO | 92% |
 | OR | 93% |
+| IL | 109%† |
 | TX | 100%† |
-| **Pooled (WLS-regression, see 5.2)** | **65%** |
+| **Pooled (WLS-regression, see 5.2)** | **59%** |
 
-\* WI's capture-rate denominator includes the non-craft manufacturers noted
-above, so this likely *understates* OBDB's true capture rate among craft
-breweries specifically.
-† Raw ratio computes to 122% (TABC's reference undercounts, see above);
-clipped to 100% since a capture rate cannot exceed a true population by
-definition — see 5.2.
+\* CA's and WI's capture-rate denominators both include populations broader
+than "craft breweries" (see above), so these numbers likely *understate*
+OBDB's true capture rate among craft breweries specifically.
+† IL's raw ratio computes to 108.6% (ILCC's cumulative export, imperfectly
+deduplicated companion license classes — see above); TX's raw ratio computes
+to 122% (TABC's reference undercounts, see above). Both clipped to 100% since
+a capture rate cannot exceed a true population by definition — see 5.2.
 
-CBP (NAICS 312120) is worse than OBDB in every calibration state (27-54%
-capture in the original 4; not re-measured for the newer 5) — consistent with
-its known brewpub-misclassification problem (brewpubs often file under NAICS
-722511, restaurants, not 312120).
+CBP (NAICS 312120) is worse than OBDB in every calibration state where
+directly compared (27-54% capture in the original 4 states) — consistent
+with its known brewpub-misclassification problem (brewpubs often file under
+NAICS 722511, restaurants, not 312120).
+
+**A cross-check worth noting**: South Carolina (no state registry, so not in
+the tables above) shows OBDB's Charleston County count (24) matching CBP's
+independently-collected federal establishment count (24) exactly — evidence
+that OBDB's raw count for at least this specific, previously-flagged county
+(see Section 9's residual ranking) is not itself inflated, even though the
+county's *residual* ranking is one of the less LOSO-stable ones (Section
+9.1). Virginia's data provides a similar direct check for Richmond city,
+another flagged county: it genuinely has an outsized raw rate (10.2 per 100k
+adults 21+), correctly distinct from the much larger, rural Richmond
+*County* — Virginia's independent cities share bare TIGER names with a
+same-named county in four cases (Fairfax, Franklin, Richmond, Roanoke),
+which required a join-key fix in `build_capture_rate_model.py` (join against
+both the bare county name and the full `NAMELSAD` for every state, not just
+one convention) to avoid silently dropping 8 Virginia rows from the
+correction model entirely.
 
 ### 5.2 Why there is no reliable national correction factor
 
@@ -167,32 +218,34 @@ A mixed-effects model (`scripts/build_capture_rate_model.py`) regressing
 log(OBDB/licensee ratio) on log(population density), with state as a random
 intercept, found:
 
-- Density has a real, statistically significant effect (coefficient ≈0.047,
+- Density has a real, statistically significant effect (coefficient ≈0.066,
   p<0.001): denser counties have higher OBDB capture rates, i.e. **OBDB
   undercounts rural areas more**, as hypothesized.
 - But **state identity dominates**: state intercepts vary far more than the
   density gradient across its full observed range, and a model with no state
   term has essentially no explanatory power.
 
-With 9 calibration states there is more information than the original 4, but
-still not enough to fully separate "what predicts capture rate" from "which
-state this happens to be" — the between-state variance actually *grew*
-(0.043 → 0.1045) once GA, PA, WA, TX, and WI were added, meaning the true
-range of state-level variation is wider than the 4-state sample suggested,
-not narrower. The practical consequence, implemented in
-`src/breweries/capture_rate_model.py`: counties in a calibrated state use
-that state's empirical rate (capped at 1.0 — see the TX case above); every
-other county uses a pooled 64.8% baseline rate with a **deliberately wide**
-interval (derived from the between-state variance, not tightened by
-density) — roughly 40-100% of the point estimate at the 95% level
-(hard-capped at 100%). That width is the honest answer, not a bug: 9 states
-still cannot support a tight one.
+With 13 calibration states there is considerably more information than the
+original 4, but still not enough to fully separate "what predicts capture
+rate" from "which state this happens to be." The between-state variance has
+moved around as states were added (0.043 at 4 states → 0.1045 at 9 → 0.0897
+at 13) rather than converging monotonically, which is itself informative:
+the range of state-level variation isn't settling down yet, so treat the
+current interval width as a snapshot, not a converged estimate. The
+practical consequence, implemented in `src/breweries/capture_rate_model.py`:
+counties in a calibrated state use that state's empirical rate (capped at
+1.0 — see the TX/IL cases above); every other county uses a pooled 59.3%
+baseline rate with a **deliberately wide** 95% interval — 33.0% to 100%
+(the uncapped upper bound is 106.7%, clipped down to 100% for the same
+reason as the calibrated-state cap) — derived from the between-state
+variance, not tightened by density. That width is the honest answer, not a
+bug: 13 states still cannot support a tight one.
 
-**On the 64.8% figure specifically** — this is *not* the exposure-weighted
+**On the 59.3% figure specifically** — this is *not* the exposure-weighted
 aggregate ratio (`obdb_count.sum()/licensee_count.sum()` across the pooled
-sample, which computes to ~75% with the 9-state sample). Those are two
+sample, which computes to ~69% with the 13-state sample). Those are two
 different quantities: the aggregate is pulled up by a handful of large,
-high-capture counties (Buncombe, Mecklenburg, Wake, Denver), while 64.8% is
+high-capture counties (Buncombe, Mecklenburg, Wake, Denver), while 59.3% is
 what a WLS regression (weighted by licensee_count, so higher-exposure
 counties still get proportionally more influence on the *fit* without
 changing what the coefficients describe) predicts for a typical county at
@@ -294,10 +347,10 @@ attached.
   properly-formed, cookie-carrying POST request — not a Cloudflare bot
   challenge, so no evasion was attempted, and none was pursued. The
   county-level "Permit Counts" report endpoint worked and was used instead.
-- **No Brewers Association bulk download or directory scrape.** Nine single
-  state-total lookups were made (NC, MI, CO, OR, WA, TX, GA, WI, PA), each
-  dated and cited inline in the relevant build script, per the project's
-  explicit "no bulk download/scrape" constraint.
+- **No Brewers Association bulk download or directory scrape.** Thirteen
+  single state-total lookups were made (NC, MI, CO, OR, WA, TX, GA, WI, PA,
+  IL, CA, NY, VA), each dated and cited inline in the relevant build script,
+  per the project's explicit "no bulk download/scrape" constraint.
 - **No Mississippi bulk alcohol-license data.** Checked thoroughly: the MS
   Dept. of Revenue's pages describe the Manufacturer/Brewpub permit
   categories but publish no roster; the only public lookup is
@@ -306,6 +359,40 @@ attached.
   scripted around for the same reason. No Mississippi open-data portal
   exists (confirmed absent, unlike CO/TX/GA's Socrata portals). A clean "no,"
   not a gap in effort — Mississippi is not a calibration state.
+- **No Ohio bulk liquor-permit data.** DataOhio's portal has no
+  Commerce/liquor dataset; OPAL (the state's own licensing system) disabled
+  bulk export from its Power BI report viewer, leaving only view/filter
+  access; the actual permit-holder search
+  (`comapps.ohio.gov/liqr/liqr_apps/PermitLookup`) is a stateful,
+  single-criterion ASP.NET search form with no documented API. Not scripted
+  around.
+- **No Vermont bulk liquor-license data.** `data.vermont.gov`'s only
+  Dept.-of-Liquor-Control datasets are traffic-stop demographic data, not
+  licensing. The Department's own licensee database lives behind a
+  Salesforce Experience Cloud login (`dllportal.my.vermont.gov`); the only
+  public-facing tool is an interactive dashboard explicitly built for town
+  clerks managing renewals, not a public bulk source.
+- **No Minnesota bulk brewery-permit data.** The state licensing authority
+  (Dept. of Public Safety, Alcohol and Gambling Enforcement) publishes no
+  roster; its own interactive search tool is bot-gated (confirmed via a
+  direct HTTP request returning a CAPTCHA challenge, not just documentation
+  review), and obtaining bulk data requires a formal Minnesota Government
+  Data Practices Act request, not a self-service download. No statewide
+  Minnesota open-data portal exists.
+- **No Tennessee state-level beer-license data at all, for a structural
+  reason.** Tennessee's ABC does not regulate ordinary beer — only
+  high-gravity beer (≥8% ABW) — so ordinary brewery permitting is entirely
+  local, city-by-city, with no statewide roll-up to request in the first
+  place. A 3-source (OBDB/OSM/CBP) dataset was still built for face-validity
+  purposes.
+- **No Arizona or South Carolina bulk alcohol-license data.** Arizona's
+  DLLC publishes no roster (only an interactive "ABC Online" search form
+  and PDF reports); its FOIA page confirms a full roster requires a
+  public-records request. South Carolina DOR's licensee lookup
+  (`mydorway.dor.sc.gov`) is a cookie-gated interactive portal with no
+  export, confirmed via a direct request returning a cookie-required error
+  page rather than data. Both got 3-source (OBDB/OSM/CBP) datasets for
+  face-validity purposes, same as Tennessee.
 
 ## 9. Model B covariate results (national, county-level, NB-GLM + state FE)
 

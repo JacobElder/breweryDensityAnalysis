@@ -8,19 +8,33 @@ used by src/breweries/capture_rate_model.py.
 Run this after all build_{state}_county_dataset.py scripts have produced their
 outputs.
 
-Known caveat — Wisconsin: WI DOR's "Brewery" permit type sweeps in some
-non-craft manufacturers (e.g. Anheuser-Busch's Milwaukee macro plant) that
-OBDB, being craft-focused, was never going to list — WI's raw capture rate
-comes out at 116.6% (more OBDB entries matched than the "true" licensee count
-in some counties would suggest is possible), which is really a measurement
-mismatch in the licensee source, not evidence OBDB over-counts. WI is kept in
-the pooled model (excluding it without a principled reason would be
-cherry-picking) but this is flagged here and in the methods memo — if the
-between-state variance or pooled rate looks sensitive to WI's inclusion,
-that's the reason, not a modeling bug. Mississippi has no known bulk
-open-data source (checked: no state open-data portal, only an interactive
-per-record search tool that this project's rules already forbid scripting
-around) and is not a calibration state.
+Known caveats — several states' licensee registries measure a different
+population than "OBDB-listed craft breweries," which shows up as a raw
+capture rate at or above 100% (kept in the pooled model rather than excluded
+without a principled reason — cherry-picking would be worse — but flagged
+here and in the methods memo):
+- WI: DOR's "Brewery" permit type sweeps in some non-craft manufacturers
+  (e.g. Anheuser-Busch's Milwaukee plant). Raw ratio 116.6%.
+- TX: TABC's public license table is documented by TABC itself to exclude
+  brewpub subordinate authorizations, so the reference undercounts, not
+  OBDB overcounting. Raw ratio 122.2%.
+- CA: ABC's export counts *licenses*, and many operators hold multiple
+  licenses per brand (satellite tasting rooms, alternating proprietorships)
+  plus some large non-craft manufacturers (e.g. major wineries' Type-01 beer
+  licenses). Raw ratio 135.3%.
+- VA: ABC's export similarly counts licensed *premises*, and several brands
+  hold multiple Virginia sites. Raw ratio 120.1%.
+- IL: ILCC's export is cumulative (includes expired licenses filtered by
+  expiration date, no explicit status column) and companion license classes
+  (base "Brewer" + a production-tier overlay) can double-list one physical
+  site despite dedup — raw ratio 108.6%, the mildest of the four.
+
+States investigated and confirmed to have no bulk open-data source (only an
+interactive per-record search tool that this project's rules forbid
+scripting around) and are NOT calibration states: MS, OH, VT, MN. TN, AZ,
+and SC also have no state licensee source, but do have OBDB/OSM/CBP-only
+datasets (`build_{state}_county_dataset.py`) used elsewhere for face-validity
+checks, not for this capture-rate model.
 """
 
 from __future__ import annotations
@@ -41,10 +55,15 @@ STATE_LICENSEE_COL = {
     "GA": "liquor_count",
     "WI": "liquor_count",
     "PA": "liquor_count",
+    "IL": "liquor_count",
+    "CA": "liquor_count",
+    "NY": "liquor_count",
+    "VA": "liquor_count",
 }
 STATE_FIPS = {
     "NC": "37", "MI": "26", "CO": "08", "OR": "41",
     "WA": "53", "TX": "48", "GA": "13", "WI": "55", "PA": "42",
+    "IL": "17", "CA": "06", "NY": "36", "VA": "51",
 }
 
 
@@ -60,13 +79,26 @@ def load_pooled_counties() -> pd.DataFrame:
 
 
 def load_land_area() -> pd.DataFrame:
-    counties = tiger.load_counties()[["STATEFP", "NAME", "ALAND"]]
+    """Return one land-area row per (state, county_name) join key.
+
+    Virginia has independent cities whose bare TIGER NAME collides with a
+    same-named county (Fairfax, Franklin, Richmond, Roanoke each have both a
+    "X City" and "X County") — VA's own county_name field disambiguates with
+    a "city"/"County" suffix (matching TIGER's NAMELSAD), unlike every other
+    calibration state, which uses the bare county name. Emit both a bare-name
+    row (for every other state) and a NAMELSAD row (so VA's suffixed names
+    also match) rather than picking one convention and silently dropping the
+    other state's rows.
+    """
+    counties = tiger.load_counties()[["STATEFP", "NAME", "NAMELSAD", "ALAND"]]
     fips_to_state = {v: k for k, v in STATE_FIPS.items()}
     counties = counties[counties["STATEFP"].isin(fips_to_state)].copy()
     counties["state"] = counties["STATEFP"].map(fips_to_state)
-    counties["county_name"] = counties["NAME"]
     counties["sqmi"] = counties["ALAND"] / 2_589_988
-    return counties[["state", "county_name", "sqmi"]]
+
+    bare = counties[["state", "NAME", "sqmi"]].rename(columns={"NAME": "county_name"})
+    full = counties[["state", "NAMELSAD", "sqmi"]].rename(columns={"NAMELSAD": "county_name"})
+    return pd.concat([bare, full], ignore_index=True).drop_duplicates(subset=["state", "county_name"])
 
 
 def main() -> None:
@@ -132,7 +164,7 @@ def main() -> None:
     by_state["capture_rate"] = by_state["obdb"] / by_state["licensee"]
     print(by_state)
     overall = model_df["obdb_count"].sum() / model_df["licensee_count"].sum()
-    print(f"\nExposure-weighted aggregate capture rate across 4 states: {overall:.1%}")
+    print(f"\nExposure-weighted aggregate capture rate across {len(STATE_LICENSEE_COL)} states: {overall:.1%}")
     print("(descriptive only — NOT used as capture_rate_model.POOLED_CAPTURE_RATE; see WLS section above)")
     print(f"Mean log_density across model counties: {mean_ld:.4f}")
     print(f"\ncapture_rate_model.py constants to use:")

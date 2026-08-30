@@ -49,7 +49,12 @@ def geocode_addresses(df: pd.DataFrame, id_col: str, street_col: str, city_col: 
         results.append(result)
 
     out = pd.concat(results, ignore_index=True)
-    coords = out["coordinates"].str.split(",", expand=True)
+    # If every row in a batch is unmatched, "coordinates" is all-empty/NaN and
+    # has no comma anywhere to split on, so str.split(expand=True) returns a
+    # single-column frame and coords[1] raises KeyError — found via a real
+    # batch (3 rural NY addresses) that came back 100% No_Match. Reindex to
+    # guarantee both columns exist regardless of match rate.
+    coords = out["coordinates"].str.split(",", expand=True).reindex(columns=[0, 1])
     out["geocoded_lon"] = pd.to_numeric(coords[0], errors="coerce")
     out["geocoded_lat"] = pd.to_numeric(coords[1], errors="coerce")
     out["id"] = out["id"].astype(df[id_col].dtype)
