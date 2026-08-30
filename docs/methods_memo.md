@@ -125,22 +125,37 @@ A mixed-effects model (`scripts/build_capture_rate_model.py`) regressing
 log(OBDB/licensee ratio) on log(population density), with state as a random
 intercept, found:
 
-- Density has a real, statistically significant effect (coefficient ≈0.07-0.08,
-  p<0.01): denser counties have higher OBDB capture rates, i.e. **OBDB
+- Density has a real, statistically significant effect (coefficient ≈0.076,
+  p<0.001): denser counties have higher OBDB capture rates, i.e. **OBDB
   undercounts rural areas more**, as hypothesized.
 - But **state identity dominates**: the four state intercepts range over roughly
   4x the magnitude of the density effect across its full observed range,
-  and a pooled model with no state term has essentially no explanatory power
-  (R²=0.008).
+  and a model with no state term has essentially no explanatory power
+  (R²=0.09, even including density).
 
 With only 4 calibration states, there is not enough information to separate
 "what predicts capture rate" from "which state this happens to be." The
 practical consequence, implemented in `src/breweries/capture_rate_model.py`:
 counties in a calibrated state use that state's empirical rate; every other
-county uses the pooled 82% rate with a **deliberately wide** interval (derived
-from the between-state variance, not tightened by density) — roughly 55-140%
-of the point estimate at the 95% level. That width is the honest answer, not a
-bug: four states cannot support a tighter one.
+county uses a pooled 70.5% baseline rate with a **deliberately wide** interval
+(derived from the between-state variance, not tightened by density) — roughly
+67-140% of the point estimate at the 95% level (hard-capped at 100%, since a
+capture rate above 1.0 is not physically meaningful). That width is the honest
+answer, not a bug: four states cannot support a tighter one.
+
+**On the 70.5% figure specifically** — this is *not* the 82% exposure-weighted
+aggregate ratio from the table above (`obdb_count.sum()/licensee_count.sum()`
+across the pooled sample). Those are two different quantities: the aggregate
+is pulled up by a handful of large, high-capture counties (Buncombe,
+Mecklenburg, Wake, Denver), while 70.5% is what the same WLS regression that
+produces the density slope predicts for a typical county at average density.
+Since the pooled fallback is applied to arbitrary counties nationally — most
+of which are small or medium, not large metros — the per-county regression
+estimate is the correct anchor; using the population-weighted aggregate would
+systematically under-correct exactly the smaller, rural counties this
+correction exists to help. (An earlier version of this module mixed the two —
+aggregate baseline, regression slope — which was internally inconsistent by
+construction; both numbers now come from the same weighted regression.)
 
 ### 5.3 What OSM adds, and what a naive combination gets wrong
 

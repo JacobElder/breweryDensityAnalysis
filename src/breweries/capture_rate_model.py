@@ -1,24 +1,34 @@
 """OBDB coverage-correction model, fit on the four calibration states (NC, MI, CO, OR).
 
-Model: log((obdb_count + 0.5) / (licensee_count + 0.5)) ~ log(population_density) + (1 | state)
+Model: log((obdb_count + 0.5) / (licensee_count + 0.5)) ~ log(population_density),
+weighted by licensee_count (WLS), fit in scripts/build_capture_rate_model.py.
 
-Two honest findings drive how this is used, not just the point estimates:
+Three honest findings drive how this is used, not just the point estimates:
 
-1. Population density has a real but small effect (coef ~0.07-0.08, p<0.01): denser
+1. Population density has a real but small effect (coef ~0.076, p<0.001): denser
    counties have higher OBDB capture rates, i.e. OBDB undercounts rural areas more.
-2. State identity dominates over density. The fixed-effects model's four state
-   intercepts range from -0.42 (NC) to +0.09 (OR) relative to the reference level —
-   several times larger than the density gradient across its full observed range.
-   A pooled (no state term) model has essentially no explanatory power (R^2=0.008).
+2. State identity dominates over density. A fixed-effects model's four state
+   intercepts range over roughly 4x the magnitude of the density gradient across
+   its full observed range, and a model with no state term has essentially no
+   explanatory power (R^2=0.09 even including density).
+3. The exposure-weighted *aggregate* ratio across all 216 calibration counties
+   (obdb_count.sum()/licensee_count.sum() = 81.8%) is a different quantity from
+   "the capture rate of a typical county" (~70.5%) — the aggregate is pulled up by
+   a handful of large, high-capture counties (Buncombe, Mecklenburg, Wake, Denver).
+   POOLED_CAPTURE_RATE below is deliberately the latter (WLS-regression-implied),
+   not the former, because correction_factor() applies its fallback to arbitrary
+   counties nationally, most of which are small/medium, not large metros — using
+   the aggregate ratio would systematically under-correct exactly the
+   smaller/rural counties this correction is supposed to help.
 
 Consequence: with only 4 calibration states, county density is NOT a reliable basis
 for a national per-county correction on its own — state-level regulatory/market
 factors this project hasn't measured explain most of the variation, and 4 states is
 too few to fit a state-level covariate model. For states with their own calibration
 data (NC, MI, CO, OR), use the state-specific empirical capture rate directly. For
-all other states, this module returns the pooled cross-state average capture rate
-(81.8%) with a wide interval derived from the between-state random-effect variance
-— explicitly wide, because that's what an n=4 group sample actually supports.
+all other states, this module returns the WLS-regression pooled rate with a wide
+interval derived from the between-state random-effect variance — explicitly wide,
+because that's what an n=4 group sample actually supports.
 """
 
 from __future__ import annotations
@@ -34,10 +44,13 @@ CALIBRATED_STATE_CAPTURE_RATES = {
     "OR": 0.930,
 }
 
-# From the MixedLM fit in scripts/build_capture_rate_model.py.
-POOLED_CAPTURE_RATE = 0.818
-LOG_DENSITY_COEF = 0.074  # per unit increase in log(people per sq mi)
-BETWEEN_STATE_LOG_SD = np.sqrt(0.043)  # ~0.207, REML group-variance estimate, 4 groups
+# From the WLS fit (weights=licensee_count) in scripts/build_capture_rate_model.py —
+# both drawn from the SAME model so the baseline and the density adjustment are
+# internally consistent (see module docstring point 3 for why this isn't just the
+# raw aggregate ratio).
+POOLED_CAPTURE_RATE = 0.705  # WLS intercept prediction at mean log_density
+LOG_DENSITY_COEF = 0.076  # WLS slope, per unit increase in log(people per sq mi)
+BETWEEN_STATE_LOG_SD = np.sqrt(0.043)  # ~0.207, REML group-variance estimate, 4 groups (unweighted MixedLM; see build script)
 
 
 def correction_factor(state: str, log_density: float | None = None) -> dict:
@@ -61,13 +74,20 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
     if log_density is not None:
         log_rate += LOG_DENSITY_COEF * (log_density - _mean_log_density())
 
-    ci_low = np.exp(log_rate - 1.96 * BETWEEN_STATE_LOG_SD)
-    ci_high = np.exp(log_rate + 1.96 * BETWEEN_STATE_LOG_SD)
+    # A capture rate is a fraction of a true population — it cannot exceed 1.0 by
+    # definition, but the log-linear density extrapolation isn't bounded above and
+    # does cross 1.0 for the handful of US counties far denser than anything in the
+    # 4-state calibration sample (Manhattan at ~72k people/sqmi vs. nothing
+    # remotely that dense in NC/MI/CO/OR). Clip the point estimate and both CI
+    # bounds at 1.0 rather than let "112% of breweries captured" through silently.
+    rate = min(float(np.exp(log_rate)), 1.0)
+    ci_low = min(np.exp(log_rate - 1.96 * BETWEEN_STATE_LOG_SD), 1.0)
+    ci_high = min(np.exp(log_rate + 1.96 * BETWEEN_STATE_LOG_SD), 1.0)
     return {
-        "capture_rate": float(np.exp(log_rate)),
+        "capture_rate": rate,
         "source": "pooled_extrapolation",
-        "ci_low": float(min(ci_low, 1.0)),
-        "ci_high": float(min(ci_high, 1.5)),
+        "ci_low": float(ci_low),
+        "ci_high": float(ci_high),
     }
 
 

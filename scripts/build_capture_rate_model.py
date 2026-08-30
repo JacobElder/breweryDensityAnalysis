@@ -71,6 +71,30 @@ def main() -> None:
     pooled_model = smf.ols("log_capture_ratio ~ log_density", data=model_df).fit()
     print(pooled_model.summary())
 
+    # The raw exposure-weighted ratio (obdb_count.sum()/licensee_count.sum(), see
+    # "Statewide pooled capture rates" below) and an *unweighted* per-county log-ratio
+    # regression are two different quantities, not just two estimates of the same
+    # one: the aggregate ratio is dominated by a handful of large, high-capture
+    # counties (Buncombe, Mecklenburg, Wake, Denver), while the unweighted regression
+    # describes a typical county. Using the aggregate ratio as the flat baseline
+    # together with the unweighted regression's density slope — which is what an
+    # earlier version of capture_rate_model.py did — silently mixed those two
+    # targets. Since correction_factor() applies its fallback to arbitrary
+    # counties nationally (most of which are small/medium, not large metros), the
+    # per-county quantity is the right one to predict, weighted by licensee_count
+    # for statistical efficiency (larger-exposure counties give a less noisy
+    # estimate of their own local capture ratio) without changing what the
+    # coefficients describe.
+    print("\n" + "=" * 70)
+    print("WLS (weights=licensee_count): log_capture_ratio ~ log_density")
+    print("=" * 70)
+    wls_model = smf.wls("log_capture_ratio ~ log_density", data=model_df,
+                         weights=model_df["licensee_count"]).fit()
+    print(wls_model.summary())
+    mean_ld = model_df["log_density"].mean()
+    wls_rate_at_mean = np.exp(wls_model.params["Intercept"] + wls_model.params["log_density"] * mean_ld)
+    print(f"\nWLS-implied capture rate at mean log_density: {wls_rate_at_mean:.4f}")
+
     print("\n" + "=" * 70)
     print("Random intercept: log_capture_ratio ~ log_density + (1|state)")
     print("=" * 70)
@@ -85,8 +109,12 @@ def main() -> None:
     by_state["capture_rate"] = by_state["obdb"] / by_state["licensee"]
     print(by_state)
     overall = model_df["obdb_count"].sum() / model_df["licensee_count"].sum()
-    print(f"\nPooled capture rate across 4 states: {overall:.1%}")
-    print(f"Mean log_density across model counties: {model_df['log_density'].mean():.4f}")
+    print(f"\nExposure-weighted aggregate capture rate across 4 states: {overall:.1%}")
+    print("(descriptive only — NOT used as capture_rate_model.POOLED_CAPTURE_RATE; see WLS section above)")
+    print(f"Mean log_density across model counties: {mean_ld:.4f}")
+    print(f"\ncapture_rate_model.py constants to use:")
+    print(f"  POOLED_CAPTURE_RATE = {wls_rate_at_mean:.3f}  (WLS intercept prediction at mean log_density)")
+    print(f"  LOG_DENSITY_COEF = {wls_model.params['log_density']:.3f}  (WLS slope)")
 
     df.to_parquet("data/processed/pooled_calibration_with_density.parquet", index=False)
     print("\nWrote data/processed/pooled_calibration_with_density.parquet")
