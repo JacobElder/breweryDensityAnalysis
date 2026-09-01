@@ -156,8 +156,8 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
                 "per 100,000 adults 21+")
     if floor is not None:
         title += " (population-floored)"
-        subtitle = (f"Counties under {floor:,} adults 21+ shown gray, not colored — shrinkage "
-                    "reduces but doesn't eliminate small-county noise")
+        subtitle = (f"Counties under {floor:,} adults 21+ shown gray, not colored — covariate "
+                    "and spatial smoothing reduce but don't eliminate small-county noise")
     ax.set_title(f"{title}\n{subtitle}", fontsize=14, fontweight="bold", pad=14)
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
