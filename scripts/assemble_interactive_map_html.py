@@ -381,7 +381,7 @@ footer {{
 <header>
   <div class="titleblock">
     <h1>US Brewery Density</h1>
-    <p class="subtitle">County &amp; metro-area rates, empirical-Bayes shrunken</p>
+    <p class="subtitle">County &amp; metro-area rates &mdash; covariates + spatial model</p>
   </div>
   <div class="controls">
     <div class="toggle-group" id="viewToggle">
@@ -393,7 +393,8 @@ footer {{
       <button data-level="cbsa">Metro/Micro (CBSA)</button>
     </div>
     <div class="toggle-group" id="modeToggle">
-      <button data-mode="shrunk" class="active">Shrunken rate</button>
+      <button data-mode="combined" class="active">Model rate</button>
+      <button data-mode="shrunk">Shrunken rate</button>
       <button data-mode="raw">Raw rate</button>
       <button data-mode="floored">Floored (pop ≥ 50k)</button>
     </div>
@@ -473,7 +474,7 @@ const BIN_LABELS = ['0–1','1–3','3–6','6–10','10–15','15+'];
 const POP_FLOOR = 50000;
 
 let level = 'county';
-let mode = 'shrunk';
+let mode = 'combined';
 let selectedId = null;
 let calibOverlayOn = true;
 let viewBox = {{x:0, y:0, w: DATA.view.viewW, h: DATA.view.viewH}};
@@ -510,10 +511,19 @@ function binIndex(v) {{
   return BINS.length - 2;
 }}
 
+// CBSA/place records have no combined-model value (the BYM2 spatial model
+// is county-only -- CBSAs and places have no shared neighbor-contiguity
+// graph the same way counties do), so every read of the model rate falls
+// back to the plain shrunken rate for those records rather than erroring.
+function modelRate(rec) {{
+  return rec.combined !== undefined ? rec.combined : rec.shrunk;
+}}
+
 function valueFor(rec) {{
   if (mode === 'raw') return rec.raw;
-  if (mode === 'floored') return rec.pop21 >= POP_FLOOR ? rec.shrunk : null;
-  return rec.shrunk;
+  if (mode === 'shrunk') return rec.shrunk;
+  if (mode === 'floored') return rec.pop21 >= POP_FLOOR ? modelRate(rec) : null;
+  return modelRate(rec); // 'combined' (default)
 }}
 
 function renderLegend() {{
@@ -580,19 +590,28 @@ function showDetail(rec, id) {{
   const panel = document.getElementById('detail');
   if (!rec) {{ panel.className = 'empty'; panel.textContent = 'Hover or click a county to see its numbers.'; return; }}
   panel.className = '';
+  const hasCombined = rec.combined !== undefined;
   const rankLine = level === 'county'
-    ? `Rank <b>#${{rec.rank.toLocaleString()}}</b> of ${{Object.keys(DATA.countyData).length.toLocaleString()}} counties nationally` +
-      (rec.rankFloored ? `<br>Rank <b>#${{rec.rankFloored}}</b> among counties ≥ 50k adults 21+` : '<br><span style="color:var(--text-muted)">Below 50k-adult population floor</span>')
+    ? (hasCombined
+        ? `Rank <b>#${{rec.rankCombined.toLocaleString()}}</b> of ${{Object.keys(DATA.countyData).length.toLocaleString()}} counties nationally (model rate)`
+        : `Rank <b>#${{rec.rank.toLocaleString()}}</b> of ${{Object.keys(DATA.countyData).length.toLocaleString()}} counties nationally`) +
+      (rec.rankFloored ? `<br>Rank <b>#${{rec.rankFloored}}</b> among counties ≥ 50k adults 21+ (shrunken rate)` : '<br><span style="color:var(--text-muted)">Below 50k-adult population floor</span>')
     : `Rank <b>#${{rec.rank.toLocaleString()}}</b> of ${{Object.keys(DATA.cbsaData).length.toLocaleString()}} CBSAs nationally`;
   const stateLine = rec.state ? rec.state : (rec.states ? rec.states.join('-') : '');
+  const modelRows = hasCombined ? `
+    <div class="detail-row"><span class="k">Model rate /100k</span><span class="v">${{rec.combined.toFixed(1)}}</span></div>
+    ${{rec.combinedCiLow !== null && rec.combinedCiLow !== undefined ? `<div class="detail-row"><span class="k">95% interval (model)</span><span class="v">${{rec.combinedCiLow.toFixed(1)}}–${{rec.combinedCiHigh.toFixed(1)}}</span></div>` : ''}}
+    ${{!rec.spatialSmoothed ? `<div class="detail-calib" style="border-left-color:var(--text-muted);">No county-neighbor data here (AK/HI/territories) &mdash; model rate falls back to the shrunken rate.</div>` : ''}}
+  ` : '';
   panel.innerHTML = `
     <h2>${{rec.name}}</h2>
     <div class="state">${{stateLine}}</div>
     <div class="detail-row"><span class="k">Breweries (OBDB)</span><span class="v">${{rec.count}}</span></div>
     <div class="detail-row"><span class="k">Adults 21+</span><span class="v">${{rec.pop21.toLocaleString()}}</span></div>
     <div class="detail-row"><span class="k">Raw rate /100k</span><span class="v">${{rec.raw.toFixed(1)}}</span></div>
+    ${{modelRows}}
     <div class="detail-row"><span class="k">Shrunken rate /100k</span><span class="v">${{rec.shrunk.toFixed(1)}}</span></div>
-    ${{rec.ciLow !== undefined ? `<div class="detail-row"><span class="k">95% interval</span><span class="v">${{rec.ciLow.toFixed(1)}}–${{rec.ciHigh.toFixed(1)}}</span></div>` : ''}}
+    ${{rec.ciLow !== undefined ? `<div class="detail-row"><span class="k">95% interval (shrunken)</span><span class="v">${{rec.ciLow.toFixed(1)}}–${{rec.ciHigh.toFixed(1)}}</span></div>` : ''}}
     <div class="detail-calib ${{isFullyCalibrated(rec) ? 'is-calibrated' : ''}}">${{calibText(rec)}}</div>
     <div class="detail-rank">${{rankLine}}</div>
   `;
@@ -723,6 +742,7 @@ const TABLE_COLUMNS = [
   {{key: 'count', label: 'Breweries', num: true}},
   {{key: 'pop21', label: 'Adults 21+', num: true}},
   {{key: 'raw', label: 'Raw /100k', num: true}},
+  {{key: 'model', label: 'Model /100k', num: true}},
   {{key: 'shrunk', label: 'Shrunken /100k', num: true}},
   {{key: 'calibrated', label: 'Calibrated', num: false}},
 ];
@@ -734,9 +754,13 @@ function tableRowsSource() {{
   return Object.keys(data).map(id => {{
     const rec = data[id];
     return {{
-      id, rank: rec.rank, name: rec.name,
+      // rank/rank_change columns follow whichever rate the map is currently
+      // showing (model rate by default), consistent with the map/legend.
+      id, rank: rec.combined !== undefined ? (rec.rankCombined || rec.rank) : rec.rank,
+      name: rec.name,
       state: rec.state || (rec.states ? rec.states.join('-') : ''),
       count: rec.count, pop21: rec.pop21, raw: rec.raw, shrunk: rec.shrunk,
+      model: modelRate(rec),
       calibrated: isFullyCalibrated(rec) ? 1 : 0,
     }};
   }});

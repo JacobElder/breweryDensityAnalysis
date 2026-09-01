@@ -5,14 +5,16 @@ breweries than expected after conditioning on tourism, age structure, income,
 college enrollment, and state regulatory regime.
 
 **Interactive map:** https://claude.ai/code/artifact/27565f11-c949-4698-8310-4194090118e7
-(county/CBSA toggle, raw/shrunken/floored views, zoom and pan, hover for exact
-numbers, and a calibration-confidence overlay — hatched counties/CBSAs sit in
-states without a directly-measured OBDB capture rate, so their coverage
-estimate is a much wider extrapolation; toggle it off to see the map
-unannotated). A **Table** tab sits alongside the map — a searchable,
-sortable listing of the same county/CBSA data for finding a specific place by
-name rather than hunting visually; clicking a row jumps back to the map with
-that county/CBSA selected.
+(county/CBSA toggle, defaults to the adopted covariate + spatial "Model rate"
+with the plain shrunken/raw/floored rates available as toggleable
+alternatives, zoom and pan, hover for exact numbers, and a
+calibration-confidence overlay — hatched counties/CBSAs sit in states
+without a directly-measured OBDB capture rate, so their coverage estimate
+is a much wider extrapolation; toggle it off to see the map unannotated).
+A **Table** tab sits alongside the map — a searchable, sortable listing of
+the same county/CBSA data for finding a specific place by name rather than
+hunting visually; clicking a row jumps back to the map with that
+county/CBSA selected.
 
 ## Setup
 
@@ -56,11 +58,17 @@ Run the test suite with `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/`
   `test_capture_rate_drivers.py`), validation (`validate_model_b_loso.py`),
   further analysis (`build_spatial_hotspots.py` — Moran's I / Getis-Ord Gi*
   hot-spot clustering, `build_brewery_deserts.py` — the inverse ranking,
-  `build_state_rollup_table.py` — state-level summary), and rendered outputs
-  (`build_choropleth.py`, `build_map_comparison.py` — raw/shrunken/corrected
-  side by side, `build_top50_table.py`, `build_top50_cbsa_table.py`,
-  `build_top50_place_table.py`, `build_interactive_map.py` +
-  `assemble_interactive_map_html.py`)
+  `build_state_rollup_table.py` — state-level summary), the adopted spatial
+  models (`fit_spatial_car_model.py` — spatial-only proof of concept,
+  `fit_combined_spatial_covariate_model.py` — the adopted BYM2 model
+  combining covariates + spatial structure) plus a validated-but-rejected
+  prototype (`build_spatial_capture_rate_model.py` +
+  `src/breweries/spatial_capture_rate.py` — geographically-informed
+  capture-rate correction, not adopted, see Key Findings), and rendered
+  outputs (`build_choropleth.py`, `build_map_comparison.py` —
+  raw/shrunken/corrected side by side, `build_top50_table.py`,
+  `build_top50_cbsa_table.py`, `build_top50_place_table.py`,
+  `build_interactive_map.py` + `assemble_interactive_map_html.py`)
 - `tests/` — pytest regression suite for the statistical modules (shrinkage,
   capture-rate correction, capture-recapture) — hand-derived expected values
   on synthetic data, not just smoke tests
@@ -112,31 +120,42 @@ Key Findings). CBSA is the recommended primary level; county is secondary;
 place is shown only above a 50,000-adults-21+ population floor. Top-50 tables
 exist for all three levels.
 
-**Two models**, both reading from the same county/CBSA/place datasets:
+**Three county-level models were built; one is adopted as the headline
+ranking.** All read from the same underlying county dataset:
 
-- **Model A — empirical Bayes shrinkage** (`fit_national_models.py`,
-  `src/breweries/shrinkage.py`): partial-pools each county's raw rate toward
-  the national mean via a Poisson-Gamma model, fit by method of moments (not
-  MLE — MLE was numerically unstable at the place level; see the module
-  docstring). Answers "where is density actually high," correcting for the
-  small-county-noise problem that dominates a raw-rate ranking. Confidence
-  intervals use exact Gamma quantiles, not a normal approximation — the
-  posterior is meaningfully skewed for the majority of counties, which have
-  0-1 observed breweries.
-- **Model B — covariate residual** (`fit_national_models.py`): negative
-  binomial regression on log(median household income), median age, college
-  enrollment share, tourism establishments per capita, 5-year county
-  population growth rate, and state fixed effects, offset by log(adults
-  21+). Ranked by shrunken residual (observed/expected, itself partially
-  pooled for the same small-count-noise reason as Model A). Answers "where
-  are there more breweries than the county's own demographic and tourism
-  profile predicts" — but see the leave-one-state-out finding below before
-  treating this ranking as precise. (Population growth was added and tested
-  as a candidate covariate specifically because it's one of the few
-  plausible drivers that varies *within* a state — a state-level-only
-  covariate like an excise tax rate would be collinear with the state fixed
-  effects already in the model and couldn't be estimated; see Key Findings
-  for the result.)
+- **The adopted model — covariates + state FE + BYM2 spatial random effect**
+  (`fit_combined_spatial_covariate_model.py`): a negative-binomial GLM on
+  log(median household income), median age, college enrollment share,
+  tourism establishments per capita, 5-year population growth, unemployment
+  rate, and median gross rent, plus state fixed effects, **plus a BYM2
+  spatial random effect** — each county's estimate is smoothed toward its
+  geographic (Queen-contiguity) neighbors via a structured (ICAR) component
+  and an unstructured (iid) component, properly weighted (Riebler et al.
+  2016 parameterization). This is the county-level rate shown by default on
+  the choropleth, the top-50 table, and the interactive map. It was adopted
+  because it beats every simpler alternative on held-out log-likelihood —
+  see Key Findings and `docs/methods_memo.md` Section 15 for the full
+  validation, including two real bugs found and fixed while building it.
+  **CBSA and place levels have no equivalent** — a shared-neighbor-graph
+  spatial model needs geographic contiguity, which CBSAs and places don't
+  have the same way counties do — so those two levels still use the plain
+  empirical Bayes model below.
+- **Empirical Bayes shrinkage** (`fit_national_models.py`,
+  `src/breweries/shrinkage.py`): partial-pools each geography's raw rate
+  toward the national mean via a Poisson-Gamma model, fit by method of
+  moments (not MLE — MLE was numerically unstable at the place level; see
+  the module docstring). This is still the model behind CBSA/place rankings,
+  and ships alongside the adopted model as a toggleable comparison at the
+  county level too. Confidence intervals use exact Gamma quantiles, not a
+  normal approximation — the posterior is meaningfully skewed for the
+  majority of counties, which have 0-1 observed breweries.
+- **Covariates + state FE, no spatial term** (`fit_national_models.py`):
+  the same negative-binomial covariate model as the adopted model, minus
+  the spatial random effect. Kept for comparison, not as a ranking in its
+  own right — see Key Findings for why: on held-out data it actually
+  performs *worse* than doing nothing (the flat national mean), which is
+  exactly the finding that motivated adding the spatial term in the first
+  place.
 
 **Coverage calibration.** OBDB is a volunteer-maintained dataset and
 undercounts true breweries by an amount that varies mostly by *state*, not by
@@ -314,24 +333,40 @@ support" section: `docs/methods_memo.md`.
   NJ, Fulton GA). The clustering survives the capture-rate correction
   (Moran's I = 0.299, 96% label agreement), so it isn't an artifact of
   OBDB's uneven state-level coverage.
-- **A spatially-aware model built on that finding genuinely outperforms the
-  existing shrinkage model, not just marginally.** Both of this project's
-  models treat counties as independent, discarding the confirmed neighbor
-  correlation above — `fit_spatial_car_model.py` builds a Bayesian
-  Negative-Binomial ICAR (conditional autoregressive) model that instead
-  smooths each county's rate toward its geographic neighbors. On a held-out
-  80/20 split, it generalizes better than the existing empirical-Bayes
-  model (mean log-likelihood −1.126/county vs. −1.253/county), and — the
-  real validation — it moves counties in exactly the direction the
-  independently-confirmed hot/cold spots predict: confirmed hot-spot
-  counties move up in rank by a mean of +52.6 (75% moved up), confirmed
-  cold-spot counties move down by a mean of −68.4, while everything else
-  stays roughly flat (mean −6). Overall correlation with the existing
-  ranking stays high (Spearman ρ=0.86) — this is a targeted correction
-  where the spatial signal says it should apply, not a wholesale reshuffle.
-  Not yet adopted as the project's default ranking; flagged as the
-  highest-leverage next accuracy improvement since it needs no new data,
-  just a different prior.
+- **A spatially-aware model built on that finding was adopted as the
+  project's headline county ranking.** Both models previously in this
+  project treated counties as independent, discarding the confirmed
+  neighbor correlation above. Two follow-ups: first, `fit_spatial_car_model.py`
+  built a pure spatial (ICAR) model with no covariates, confirming the
+  concept worked (held-out log-lik −1.126/county vs. Model A's
+  −1.253/county). Second, `fit_combined_spatial_covariate_model.py` merged
+  that spatial term with Model B's covariates into one BYM2 model — and
+  the result clarified something neither piece showed alone: **Model B's
+  covariates, on their own, generalize *worse* than doing nothing**
+  (held-out log-lik −1.353/county, worse than Model A's flat mean), but
+  once the spatial term is added back in, the same covariates become
+  genuinely useful (combined: **−1.077/county, the best of all four**).
+  Covariates only pay off once spatial structure is present to keep them
+  honest. Validated the same way as the CAR-only model — confirmed hot-spot
+  counties move up in rank (mean +45, 63% moved up), cold-spot counties move
+  down (mean −50), and overall correlation with the prior ranking stays high
+  (Spearman ρ=0.84) — a targeted correction, not a reshuffle. One real bug
+  surfaced and was fixed during this work, worth naming because it silently
+  affected Model B too: `tourism_estab_per_10k` (tourism establishments per
+  10,000 residents) is unbounded for tiny counties — one ski lodge in a
+  640-person county produced a ratio of 164.6, ~40 standard deviations
+  above the national mean of 3.9 — and feeding that into a linear model
+  produced a nonsensical 983-breweries-per-100k estimate for that county.
+  Fixed by winsorizing the covariate at its 99th percentile (33 counties
+  capped) — the same fix quietly improves Model B's fitted values too, even
+  though Model B was never re-adopted as a standalone ranking. Convergence
+  caveat, reported honestly rather than hidden: after a longer run (4,000
+  tune + 4,000 draws, 6 chains, target_accept=0.97), the spatial term
+  (`phi_icar`) converges cleanly (rhat 1.043-1.049) but the 56 covariate/
+  state-FE coefficients (`beta`) remain slightly soft (rhat ~1.06-1.07,
+  down from ~1.11 before the longer run) — the held-out log-likelihood
+  comparison above is robust to this, but individual coefficient point
+  estimates should be read with that caveat in mind.
 - **The inverse ranking — large-population counties with unexpectedly *low*
   density — surfaces a different, coherent story than "random leftover
   counties."** (`build_brewery_deserts.py`,
@@ -371,6 +406,38 @@ support" section: `docs/methods_memo.md`.
   than expected" list is essentially unchanged (two adjacent-rank swaps
   only). Reported here on the same terms as the capture-rate-driver test
   above: an honest null, not a result worth hiding.
+- **Two more Model B covariates were tried: one real effect, one clean
+  null, one rejected before it was ever fit.** County unemployment rate
+  (ACS) has a significant negative effect (coefficient −6.347, p=4.6e-04) —
+  a 1-SD increase (~2.65 points, on a 4.8% mean) is associated with roughly
+  15% fewer breweries than the model expects, controlling for everything
+  else. Median gross rent (as a cost-of-doing-business proxy — commercial
+  rent isn't available at county granularity) came back a clean near-null
+  (p=0.170). A third candidate, county wet/dry alcohol-sales status, was
+  investigated and **not added**: no single bulk dataset with county-level
+  granularity exists (NIAAA's Alcohol Policy Information System only goes
+  down to the state level), and assembling one by pulling individual state
+  or Wikipedia pages would be the same directory-scraping this project has
+  already ruled out elsewhere (see the Brewers Association sourcing rule in
+  Known Limitations) — reported as a "no, here's why" on the same terms as
+  every other excluded data source in this project.
+- **A geographically-informed capture-rate correction was tried and
+  rejected — a rare case where the spatial-neighbor idea that worked so
+  well for density didn't transfer.** Given that neighboring states'
+  calibrated capture rates visibly cluster (the Northeast corridor is
+  almost entirely calibrated now), it seemed plausible an uncalibrated
+  state's correction could borrow from its calibrated neighbors the same
+  way counties borrow from their neighbors in the spatial model above.
+  Built and leave-one-out validated on the 23 calibrated states: the best
+  neighbor-blended estimate beat the existing density-only pooled model by
+  only 3% MAE, and actually did *worse* than the existing model for 9 of 22
+  states with a calibrated neighbor — capture rate turns out to be
+  dominated by idiosyncratic per-state registry quirks (see Section 5.1's
+  table) that don't transfer geographically the way brewery density does.
+  **Not adopted** — the pooled model in `capture_rate_model.py` is
+  unchanged; the adjacency-graph infrastructure (`src/breweries/spatial_capture_rate.py`)
+  is kept as a validated prototype in case the calibrated-state count grows
+  enough to revisit this.
 - **A three-panel side-by-side comparison figure**
   (`build_map_comparison.py`, `data/processed/us_brewery_density_comparison.png`)
   makes the capture-rate correction's uneven effect (see above) visible in
@@ -503,8 +570,17 @@ clipped >100% state but actually a normal 83%), caught only because the
 central model refit — deliberately kept as a single, non-parallelized step
 specifically to avoid this class of error — reproduced all 13 pre-existing
 states' values almost exactly, giving a trustworthy baseline against which
-the new states' numbers could be checked rather than taken on faith. Real
-bugs caught across all six rounds:
+the new states' numbers could be checked rather than taken on faith. A
+seventh round added two more Model B covariates (unemployment rate,
+significant; median rent, null) after investigating and correctly rejecting
+a third (county wet/dry status — no usable bulk source), tried and rejected
+a geographically-informed capture-rate correction after honest LOSO
+validation showed it didn't beat the existing model, and merged the CAR
+model's spatial term with Model B's covariates into one BYM2 model —
+adopted as the project's new headline county ranking after it beat all
+three simpler alternatives on held-out log-likelihood, including a real
+finding that Model B's covariates alone actually generalize *worse* than
+the flat national mean. Real bugs caught across all seven rounds:
 
 - A normal-approximation confidence interval on a skewed Gamma posterior that
   materially understated uncertainty for low-count counties/places (now
@@ -574,3 +650,28 @@ bugs caught across all six rounds:
   its own unrelated viewport-size quirk (a ~500px floor that ignored the
   requested window size) that could easily have been mistaken for the same
   bug or masked it entirely.
+- `tourism_estab_per_10k` (tourism establishments per 10,000 residents, a
+  Model B covariate) had no protection against small-denominator blowup —
+  a handful of tourism establishments in a county with a few hundred
+  residents produces a per-10k ratio with no real-world meaning (Mineral
+  County, CO: 12 establishments / 640 people = 164.6, vs. a national mean
+  of 3.9). Silently present in Model B since it was first built, never
+  caught because Model B's reported tables are always population-floored
+  at 50k adults, which happens to exclude every affected county. Surfaced
+  when the newly-adopted spatial+covariate model's *unfloored* output fed
+  this uncapped value into a log-linear predictor and produced a
+  983-breweries-per-100k point estimate for that county, which broke the
+  choropleth's legend and would have misled anyone reading the underlying
+  data file for that specific county. Fixed by winsorizing at the 99th
+  percentile (33 counties capped) in `build_national_county_dataset.py`,
+  which also quietly corrects Model B's own fitted values for those
+  counties even though Model B was never re-adopted as a standalone
+  ranking. A related, initially-suspected-but-ultimately-secondary issue
+  was also fixed alongside it: the model's posterior point estimate used
+  the mean of the rate samples rather than the median, which for a
+  low-exposure county with wide posterior uncertainty in its linear
+  predictor can be substantially inflated relative to the median (the
+  classic log-normal mean-vs-median gap) — switched to the median, standard
+  practice in Bayesian small-area disease-mapping for exactly this reason,
+  though the winsorization fix turned out to be the one that actually
+  mattered most for this specific case.

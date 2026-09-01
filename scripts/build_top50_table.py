@@ -1,8 +1,10 @@
 """Render a styled PNG table of the top 50 counties by brewery density.
 
-Population-floored (>=50k adults 21+) and ranked by the shrunken (empirical
-Bayes) posterior rate, not the raw rate, for the same reason the choropleth
-has a floored variant — raw rates are dominated by small-county noise.
+Population-floored (>=50k adults 21+) and ranked by the project's adopted
+headline model (covariates + state FE + BYM2 spatial random effect, see
+fit_combined_spatial_covariate_model.py and methods memo Section 15), not
+the raw rate, for the same reason the choropleth has a floored variant —
+raw rates are dominated by small-county noise.
 """
 
 from __future__ import annotations
@@ -15,10 +17,10 @@ TOP_N = 50
 
 
 def main() -> None:
-    df = pd.read_parquet("data/processed/us_county_shrunken_rankings.parquet")
+    df = pd.read_parquet("data/processed/us_county_combined_model_rankings.parquet")
     top = (
         df[df["adults_21plus"] >= POPULATION_FLOOR]
-        .sort_values("eb_posterior_rate_per_100k", ascending=False)
+        .sort_values("combined_posterior_rate_per_100k", ascending=False)
         .head(TOP_N)
         .reset_index(drop=True)
     )
@@ -31,10 +33,10 @@ def main() -> None:
             f"{r['obdb_count']:.0f}",
             f"{r['adults_21plus']:,.0f}",
             f"{r['obdb_rate_per_100k_21plus']:.1f}",
-            f"{r['eb_posterior_rate_per_100k']:.1f}",
+            f"{r['combined_posterior_rate_per_100k']:.1f}",
         ])
 
-    col_labels = ["Rank", "County", "Breweries", "Adults 21+", "Raw rate\n/100k", "Shrunken rate\n/100k"]
+    col_labels = ["Rank", "County", "Breweries", "Adults 21+", "Raw rate\n/100k", "Model rate\n/100k"]
     col_widths = [0.06, 0.34, 0.13, 0.15, 0.15, 0.17]
 
     n_rows = len(rows) + 1
@@ -63,8 +65,9 @@ def main() -> None:
 
     fig.suptitle(f"Top {TOP_N} US Counties by Brewery Density", fontsize=16, fontweight="bold", y=0.99)
     fig.text(0.5, 0.955,
-              f"Population floor: >= {POPULATION_FLOOR:,} adults 21+. Ranked by empirical Bayes "
-              "shrunken posterior rate, not raw rate (see methods memo).",
+              f"Population floor: >= {POPULATION_FLOOR:,} adults 21+. Ranked by the project's "
+              "adopted model (covariates + state FE + spatial random effect), not raw rate "
+              "(see methods memo Section 15).",
               ha="center", fontsize=9, color="#555555")
     fig.text(0.5, 0.01,
               "Source: Open Brewery DB (uncorrected for coverage gap, estimated 7-38% "

@@ -988,3 +988,223 @@ environment turned out to have its own unrelated ~500px viewport-size floor
 that ignored the requested `--window-size`, which could easily have masked
 or been mistaken for the real bug if diagnosis had stopped at "does the
 screenshot look right."
+
+## 15. The adopted model: covariates + state FE + BYM2 spatial random effect
+
+Section 12.1 validated a pure spatial (ICAR) alternative to Model A and
+flagged the natural next step: Model B's covariates and the CAR model's
+spatial term had never been combined, even though each captured real signal
+the other didn't. This section documents that combination
+(`scripts/fit_combined_spatial_covariate_model.py`), its validation, and its
+adoption as the project's headline county-level ranking — replacing Model A
+in that role. Model A remains available as a toggleable comparison
+everywhere it was previously shown, and remains the model behind CBSA/place
+rankings, which have no shared-neighbor-graph equivalent (a CBSA or place
+doesn't border its neighbors the way a county borders its neighbors, so a
+BYM2 spatial term isn't defined at those levels).
+
+### 15.1 Model specification
+
+Negative-binomial GLM: `count_i ~ NegBinomial(mu_i, alpha)`,
+`mu_i = exposure_i * exp(X_i * beta + spatial_i)`, where `X_i` is the same
+7-covariate design (log median household income, median age, college
+enrollment share, tourism establishments per 10k, 5-year population growth,
+unemployment rate, median gross rent) plus 49 state dummies used in Model B
+(Section 9), and `spatial_i` is a **BYM2** (Besag-York-Mollié, Riebler et
+al. 2016 parameterization) random effect combining a structured and an
+unstructured component:
+
+```
+spatial_i = sigma * (sqrt(rho/scale) * phi_i + sqrt(1-rho) * theta_i)
+phi   ~ ICAR(W)            -- structured: smoothed toward Queen-contiguity neighbors
+theta ~ Normal(0, 1), iid  -- unstructured: county-specific, no cross-county structure
+rho   ~ Beta(1, 1)         -- mixing weight, structured vs. unstructured
+sigma ~ HalfNormal(2)      -- overall spatial standard deviation
+```
+
+`scale`, the geometric mean marginal variance of the ICAR structure, is
+computed **exactly** (not approximated): letting `Q = diag(neighbor_count) - W`
+(rank-deficient by one for a connected graph) and `v = ones(N)/sqrt(N)`
+(its null vector), `Q + vv^T` is invertible and `(Q+vv^T)^-1 - vv^T` gives
+the Moore-Penrose pseudoinverse restricted to `v`'s orthogonal complement —
+mathematically identical to what R-INLA's `inla.qinv(..., constr=...)`
+computes, just via a dense N×N solve (N=3,109 CONUS counties makes this
+trivial, <1s) rather than a sparse one. `scale = 0.5686`.
+
+### 15.2 Fitting
+
+Full NUTS throughout (no ADVI/MAP compromise needed) via PyMC. The final
+production fit uses a longer run than the initial attempt, after an
+explicit request to push convergence further: **4,000 tuning + 4,000 draw
+iterations, 6 chains, target_accept=0.97** (up from an initial 2,000/2,000/4/
+0.95). A macOS-specific SIGSEGV (Accelerate's threaded BLAS conflicting
+with PyMC's multiprocessing worker pool) was found and fixed by pinning
+every worker to a single BLAS thread (`OMP_NUM_THREADS`,
+`VECLIB_MAXIMUM_THREADS`, `OPENBLAS_NUM_THREADS`, `NUMBA_NUM_THREADS` all
+set to `1` before numpy/pymc import) and letting multiprocessing provide
+the parallelism across chains instead.
+
+**Convergence** (final production fit, after the longer run): 0
+divergences. `theta_iid` and the scalar parameters (`alpha`, `sigma_bym`)
+converge cleanly (rhat ≤1.002, ESS in the thousands). `phi_icar` converges
+acceptably (rhat 1.043-1.049, ESS 42-115). The 56 covariate/state-FE
+coefficients (`beta`) remain the softest part of the fit (rhat ~1.06-1.07,
+ESS 40-90) — improved from ~1.11/28 in the initial shorter run, but not
+fully under the strict 1.01 bar even after 2x draws/tune, 1.5x chains, and
+a higher target_accept. This is reported honestly rather than re-run
+indefinitely chasing a marginal gain: the held-out log-likelihood
+comparison below (which only needs predictive accuracy, not clean
+per-coefficient posteriors) is robust to this; individual `beta` point
+estimates should be read with the caveat that a handful of state-dummy
+coefficients are mixing slowly, plausibly reflecting partial
+non-identifiability between a compact state's fixed effect and its own
+ICAR neighborhood signal (both explain some of the same within-state,
+between-county variance).
+
+### 15.3 Held-out validation: all four models on the identical split
+
+Same seeded 80/20 train/test split (seed=42) used throughout this memo's
+spatial work, run across Model A, Model B (no spatial term), the CAR-only
+model, and the combined model, on the identical 3,109-county CONUS
+universe:
+
+| Model | Held-out log-lik/county |
+|---|---|
+| **Combined (covariates + state FE + BYM2)** | **−1.077** |
+| CAR-only (pure ICAR, no covariates) | −1.126 |
+| Model A (flat national mean) | −1.253 |
+| Model B (covariates + state FE, no spatial) | −1.354 |
+
+Model A and CAR-only reproduce Section 12.1's figures almost exactly
+(−1.253/−1.126 vs. −1.2532/−1.1265), confirming the split and replication
+are faithful. **The combined model wins outright** — a real, nontrivial
+improvement over CAR-only alone (+0.049 log-lik/county), not a wash. The
+more consequential finding is what Model B alone does: it generalizes
+*worse* than the flat mean, meaning its covariates are actively overfitting
+without the spatial term to regularize them. (Model B's own statsmodels
+NB-GLM MLE needed a warm start from a Poisson-GLM fit to avoid a degenerate
+near-zero-alpha collapse — the exact pathology `shrinkage.py` already warns
+about — a real numerical fragility in the covariate-only specification,
+separate from but consistent with its poor held-out performance.) Combining
+covariates with spatial structure is not one component drowning out the
+other: the spatial term alone (CAR-only) leaves real covariate-explainable
+variance on the table, and the covariates alone (Model B) don't generalize
+without spatial regularization. Posterior `rho` (structured share of
+spatial variance): mean 0.970, 89% ETI [0.915, 0.998] — the ICAR component
+dominates almost entirely over the unstructured `theta`.
+
+**Qualitative check against Section 12's independently-derived clusters**
+(population-floored CONUS, n=799, Spearman ρ=0.839 vs. Model A — a targeted
+correction, not a reshuffle): confirmed hot-spot counties move UP by a mean
+of 45.3 ranks (median +14, 63% moved up); confirmed cold-spot counties move
+DOWN by a mean of 50.4 ranks; not-significant counties drift slightly down
+(mean −5.3) — the same qualitative pattern CAR-only showed, now with
+covariates also contributing.
+
+### 15.4 Two bugs found and fixed while adopting this model
+
+**Posterior mean vs. median.** The first pass reported the posterior
+*mean* of the rate samples as the point estimate. For a low-exposure county
+with wide posterior uncertainty in its linear predictor, `exp()` of a
+wide-variance quantity has mean substantially greater than median (the
+standard log-normal mean-vs-median gap, mean ≈ median × exp(σ²/2)) — found
+via a real case, Mineral County CO (0 observed breweries, 640 adults 21+),
+which reported 983 breweries/100k under the mean-based estimator. Switched
+to the posterior **median** (50th percentile of the same samples already
+being computed for the CI) — standard practice in Bayesian small-area
+disease mapping for exactly this reason. This alone only partially fixed
+the Mineral County case (983 → 879), which led to root-causing a second,
+more consequential bug:
+
+**`tourism_estab_per_10k` winsorization.** This Model B covariate (tourism
+establishments per 10,000 residents, `build_national_county_dataset.py`) is
+a small numerator over a small population denominator for the smallest
+counties, with no protection against the resulting blowup — Mineral County,
+CO: 12 establishments / 640 adults = 164.6, vs. a national mean of 3.9 and
+99th percentile of 34.8; 42 counties (mostly remote Alaska boroughs and
+tiny mountain/lake counties) sit 2-50x past the 99th percentile. Feeding a
+value 15-40 standard deviations outside a linear model's effective training
+range is guaranteed to produce out-of-distribution nonsense by construction
+— this, not the mean/median choice, was the dominant driver of the 983
+figure (median dropped only to 879 with the same uncapped covariate, then
+to 38.8 once the covariate itself was capped). This bug **predates this
+round of work and was already silently present in Model B**, undetected
+only because every reported Model B table is population-floored at 50k
+adults, which happens to exclude every one of the affected tiny counties.
+Fixed by winsorizing `tourism_estab_per_10k` at its 99th percentile (33
+counties capped on the final data vintage) in `build_national_county_dataset.py`
+— preserves the real tourism signal for the ~99% of counties where the
+ratio is well-behaved while preventing a few small-denominator artifacts
+from dominating a linear model's fitted values for any county, calibrated
+or not. Post-fix, the maximum combined-model rate nationally is 76.7/100k
+(Ouray County, CO — a real, population-floored-excluded but plausible
+value for a small mountain county genuinely inside the confirmed Colorado
+Front Range/Rockies hot-spot cluster from Section 12), not 983.
+
+Both fixes are in the shared covariate/model-output pipeline, so both
+transparently improve Model B's own (unpublished-as-a-ranking) fitted
+values too, even though Model B itself was never re-adopted as a standalone
+ranking.
+
+### 15.5 Downstream adoption
+
+`scripts/build_choropleth.py`, `scripts/build_top50_table.py`, and
+`scripts/build_interactive_map.py` were repointed from
+`us_county_shrunken_rankings.parquet`/`eb_posterior_rate_per_100k` to
+`us_county_combined_model_rankings.parquet`/`combined_posterior_rate_per_100k`.
+The interactive map keeps the plain shrunken/raw/floored rates as
+toggleable alternatives (default mode renamed "Model rate") rather than
+removing them, consistent with this project's pattern of superseding a
+headline number without deleting the comparison. CBSA and place-level
+outputs are unchanged (Model A, per Section 15's opening paragraph).
+
+## 16. Two more attempts this round: one covariate success, one rejected spatial idea
+
+**Model B covariates, round 3** (`src/breweries/sources/covariates.py`,
+`scripts/build_national_county_dataset.py`, `scripts/fit_national_models.py`):
+county unemployment rate (ACS B23025) added with a significant negative
+effect (coefficient −6.347, SE 1.811, p=4.6e-04 — a 1-SD increase, ~2.65
+points on a 4.8% mean, associates with ~15% fewer breweries than expected).
+Median gross rent (ACS B25064, an explicit proxy for commercial
+cost-of-doing-business, which isn't measured at county granularity) added
+with a clean near-null (coefficient +0.000195, p=0.170). County wet/dry
+alcohol-sales status was investigated and **not added**: NIAAA's Alcohol
+Policy Information System (`alcoholpolicy.niaaa.nih.gov`) was checked
+directly and its jurisdiction selector only goes down to state/DC, no
+county-level topic exists anywhere on the site; the only way to assemble a
+county-level roster would be pulling individual state ABC-board pages or
+Wikipedia's per-state dry-community lists one at a time, which is the same
+directory-scraping-by-another-name this project already ruled out for the
+Brewers Association case (Section 8) — reported as excluded for a specific,
+principled reason, not silently dropped.
+
+**Spatially-informed capture-rate correction**
+(`src/breweries/spatial_capture_rate.py`,
+`scripts/build_spatial_capture_rate_model.py`) — tried and **rejected**
+after honest validation, included here specifically because a negative
+result from applying the same idea that worked for density is informative
+in its own right. Motivation: calibrated states visibly cluster
+geographically (the Northeast/Mid-Atlantic corridor is now almost entirely
+calibrated), suggesting an uncalibrated state's capture rate might borrow
+from its calibrated neighbors the way Section 15's spatial term borrows
+from neighboring counties. A US state-adjacency graph was built (hardcoded,
+then cross-verified against a TIGER-derived Queen-contiguity graph computed
+the same way as the county-level graph — exact match apart from 3 edges
+that turned out to be water-boundary corner-touches, not real land
+borders, correctly excluded) and used to build a simple neighbor-average/
+density-only shrinkage blend (a formal state-level CAR/ICAR model was
+considered and rejected as not identifiable at n=23 calibrated states —
+most have only 1-4 calibrated neighbors, and Texas has zero). Leave-one-out
+validation on the 23 calibrated states: the best blend beat the existing
+density-only pooled model by only 3.0% MAE in aggregate, and performed
+*worse* than the existing model for 9 of 22 states with a calibrated
+neighbor (VA, KY, WV, PA, WI, NJ, MA, GA, CT, MI, FL, CA). Capture rate is
+dominated by idiosyncratic per-state registry quirks (Section 5.1's table —
+Missouri's licensee category excluding its own largest breweries, Wyoming's
+list only capturing self-distributing brewers, Wisconsin's sweeping in
+non-craft manufacturers) that don't transfer to geographic neighbors the
+way brewery density's spatial correlation does. **Not adopted** — the
+pooled fallback in `capture_rate_model.py` is unchanged; the adjacency
+infrastructure is kept as a validated prototype in case the calibrated
+count grows enough to revisit this with more per-state neighbors to draw
+on.

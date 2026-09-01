@@ -1,15 +1,17 @@
-"""National county-level choropleth(s) of brewery density (shrunken posterior rate),
-styled like a standard county choropleth: binned color scale, CONUS main map with
-AK/HI insets, labeled major cities from the face-validity list.
+"""National county-level choropleth(s) of brewery density, using the project's
+adopted headline model (covariates + state FE + BYM2 spatial random effect,
+see fit_combined_spatial_covariate_model.py and methods memo Section 15),
+styled like a standard county choropleth: binned color scale, CONUS main map
+with AK/HI insets, labeled major cities from the face-validity list.
 
 Produces two versions:
-- us_brewery_density_choropleth.png: every county colored by its shrunken rate.
+- us_brewery_density_choropleth.png: every county colored by its rate.
 - us_brewery_density_choropleth_floored.png: counties below POPULATION_FLOOR
   shown in a distinct "insufficient population" gray rather than colored —
-  empirical Bayes shrinkage reduces but does not eliminate small-county noise
-  (a county can still land in the darkest bin off a handful of breweries), so
-  this floored version is the more conservative one to read as a "where is
-  density high" map.
+  the model's shrinkage/spatial-smoothing reduces but does not eliminate
+  small-county noise (a county can still land in the darkest bin off a
+  handful of breweries), so this floored version is the more conservative
+  one to read as a "where is density high" map.
 
 Labeling is collision-aware (src/breweries/map_labels.py), not a fixed list:
 the original face-validity cities are placed first as priority anchors, then
@@ -30,7 +32,15 @@ from matplotlib.patches import Patch
 from breweries.map_labels import LabelCandidate, place_labels
 from breweries.sources import tiger
 
-RANKINGS_PATH = "data/processed/us_county_shrunken_rankings.parquet"
+# The project's headline county model, as of this round: covariates + state
+# FE + a BYM2 spatial random effect (scripts/fit_combined_spatial_covariate_model.py),
+# adopted after it beat Model A (flat-mean shrinkage), Model B (covariates
+# alone), and the CAR-only spatial model on held-out log-likelihood -- see
+# docs/methods_memo.md Section 15. Model A's plain shrunken rate is still
+# computed and shipped in this same file (`eb_posterior_rate_per_100k`) for
+# comparison, just no longer the default map.
+RANKINGS_PATH = "data/processed/us_county_combined_model_rankings.parquet"
+VALUE_COL = "combined_posterior_rate_per_100k"
 POPULATION_FLOOR = 50_000
 MAX_AUTO_LABELS = 22
 ANCHOR_EXCLUSION_RADIUS_M = 80_000  # ~50 miles; skip an auto-label this close to a placed anchor
@@ -70,17 +80,17 @@ def load_county_geodata() -> gpd.GeoDataFrame:
     rankings["county_geoid"] = rankings["county_geoid"].str.zfill(5)
 
     merged = counties.merge(
-        rankings[["county_geoid", "eb_posterior_rate_per_100k", "adults_21plus", "state_abbr"]],
+        rankings[["county_geoid", VALUE_COL, "adults_21plus", "state_abbr"]],
         left_on="GEOID", right_on="county_geoid", how="left",
     )
-    match_rate = merged["eb_posterior_rate_per_100k"].notna().mean()
+    match_rate = merged[VALUE_COL].notna().mean()
     print(f"Counties matched to rate data: {match_rate:.1%}")
     return merged
 
 
 def build_auto_label_candidates(
     conus_albers: gpd.GeoDataFrame, anchor_points_albers: list[tuple[float, float]],
-    value_col: str = "eb_posterior_rate_per_100k",
+    value_col: str = VALUE_COL,
 ) -> list[LabelCandidate]:
     """Top-rate counties (population-floored), as label candidates in Albers
     meters, excluding any within ANCHOR_EXCLUSION_RADIUS_M of a placed anchor.
@@ -104,7 +114,7 @@ def build_auto_label_candidates(
 
 
 def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
-               value_col: str = "eb_posterior_rate_per_100k", title_prefix: str = "US Brewery Density by County",
+               value_col: str = VALUE_COL, title_prefix: str = "US Brewery Density by County",
                source_note: str | None = None) -> None:
     """Render the CONUS+AK+HI choropleth. If floor is set, counties with fewer
     adults_21plus than floor are drawn in a distinct gray instead of colored.
@@ -142,7 +152,8 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
     draw(ax, conus)
 
     title = title_prefix
-    subtitle = "Shrunken posterior rate per 100,000 adults 21+ (empirical Bayes, partial pooling toward national mean)"
+    subtitle = ("Combined model: covariates + state fixed effects + a BYM2 spatial random effect, "
+                "per 100,000 adults 21+")
     if floor is not None:
         title += " (population-floored)"
         subtitle = (f"Counties under {floor:,} adults 21+ shown gray, not colored — shrinkage "
@@ -197,11 +208,15 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
 
     fig.text(0.5, 0.01,
               source_note or
-              "Sources: Open Brewery DB, Census ACS 5-year (2020-2024), empirical Bayes shrinkage "
-              "calibrated on 13-state licensee data. OBDB undercounts true brewery count "
-              "by an amount that varies by state (see methods memo) — this map is "
+              "Sources: Open Brewery DB, Census ACS 5-year (2020-2024). County rate is the "
+              "project's adopted headline model — income, age, college share, tourism, "
+              "population growth, unemployment, and rent covariates plus state fixed effects "
+              "and a BYM2 spatial random effect (neighboring counties inform each other's "
+              "estimate), validated by held-out log-likelihood against three simpler "
+              "alternatives (see methods memo Section 15). OBDB undercounts true brewery count "
+              "by an amount that varies by state (see methods memo Section 5) — this map is "
               "uncorrected for that gap.",
-              ha="center", fontsize=7.5, color="#555555", wrap=True)
+              ha="center", fontsize=6.8, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)

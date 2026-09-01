@@ -138,6 +138,11 @@ def build_cbsa_layer(view_dims):
 
 
 def load_county_data() -> dict:
+    # The project's adopted headline model (covariates + state FE + BYM2
+    # spatial random effect) is the map's default rate; the plain
+    # empirical-Bayes shrunken rate ships alongside it as a toggleable
+    # alternative, same as raw/floored already are -- see methods memo
+    # Section 15 for why the combined model was adopted.
     df = pd.read_parquet("data/processed/us_county_shrunken_rankings.parquet")
     df["county_geoid"] = df["county_geoid"].astype(str).str.zfill(5)
     df = df.sort_values("eb_posterior_rate_per_100k", ascending=False).reset_index(drop=True)
@@ -146,6 +151,16 @@ def load_county_data() -> dict:
         "eb_posterior_rate_per_100k", ascending=False).reset_index(drop=True)
     floored["rank_floored"] = floored.index + 1
     df = df.merge(floored[["county_geoid", "rank_floored"]], on="county_geoid", how="left")
+
+    combined = pd.read_parquet("data/processed/us_county_combined_model_rankings.parquet")
+    combined["county_geoid"] = combined["county_geoid"].astype(str).str.zfill(5)
+    combined = combined.sort_values("combined_posterior_rate_per_100k", ascending=False).reset_index(drop=True)
+    combined["rank_combined"] = combined.index + 1
+    df = df.merge(
+        combined[["county_geoid", "combined_posterior_rate_per_100k", "combined_ci_low_per_100k",
+                  "combined_ci_high_per_100k", "spatial_smoothing_applied", "rank_combined"]],
+        on="county_geoid", how="left",
+    )
 
     out = {}
     for _, r in df.iterrows():
@@ -160,8 +175,13 @@ def load_county_data() -> dict:
             "shrunk": round(float(r["eb_posterior_rate_per_100k"]), 2),
             "ciLow": round(float(r["eb_ci_low_per_100k"]), 2),
             "ciHigh": round(float(r["eb_ci_high_per_100k"]), 2),
+            "combined": round(float(r["combined_posterior_rate_per_100k"]), 2),
+            "combinedCiLow": round(float(r["combined_ci_low_per_100k"]), 2) if pd.notna(r["combined_ci_low_per_100k"]) else None,
+            "combinedCiHigh": round(float(r["combined_ci_high_per_100k"]), 2) if pd.notna(r["combined_ci_high_per_100k"]) else None,
+            "spatialSmoothed": bool(r["spatial_smoothing_applied"]) if pd.notna(r["spatial_smoothing_applied"]) else False,
             "rank": int(r["rank_all"]),
             "rankFloored": int(r["rank_floored"]) if pd.notna(r["rank_floored"]) else None,
+            "rankCombined": int(r["rank_combined"]) if pd.notna(r["rank_combined"]) else None,
             # Calibration confidence: whether this county's state has a real,
             # independently-measured OBDB capture rate (CALIBRATED_STATE_CAPTURE_RATES)
             # vs. the much less certain pooled/extrapolated rate every other state uses.

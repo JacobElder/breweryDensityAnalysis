@@ -1,5 +1,6 @@
 """County-level covariates for the residual model: tourism, college-town share,
-income, median age, population density (urban/rural proxy), and population growth.
+income, median age, population density (urban/rural proxy), population growth,
+unemployment rate, and median gross rent.
 
 Tourism proxy: CBP NAICS 721 (Accommodation) establishment count per capita.
 College-town proxy: ACS share of population 3+ enrolled in undergrad/grad school.
@@ -8,6 +9,25 @@ Population growth: percent change in ACS total population (B01001_001E) between
 an earlier 5-year vintage and the current one (see EARLIER_ACS5_YEAR below) --
 unlike the other covariates this one genuinely varies within a state, so it
 isn't collinear with the model's state fixed effects.
+Unemployment rate: ACS B23025_005E (unemployed, civilian labor force) /
+B23025_003E (civilian labor force) -- standard county-level labor-market
+condition, varies within a state.
+Median gross rent: ACS B25064_001E, county median gross rent in dollars. Used
+as a proxy for a county's general cost-of-doing-business / economic barrier to
+entry -- commercial real-estate cost isn't available at county granularity, so
+residential rent stands in for it. This is a proxy, not a direct measure of
+commercial rent, and is documented as such in the methods memo.
+
+A county "wet/dry/moist" alcohol-sales-status covariate was investigated and
+NOT added: NIAAA's Alcohol Policy Information System (alcoholpolicy.niaaa.nih.gov)
+was checked directly (its "Download Policy Topic Data" tool) and its
+~40 policy topics and "jurisdictions" selector cover only the 50 states + DC --
+there is no county-level topic or sub-state jurisdiction option anywhere on the
+site. No other single, systematic bulk source with county-level wet/dry status
+was found either; the only way to assemble one would be scraping individual
+state ABC-board pages / Wikipedia's per-state dry-community lists one at a
+time, which is the same directory-scraping pattern this project's methods memo
+(Section 8) already rejected for the Brewers Association case. Not pursued.
 """
 
 from __future__ import annotations
@@ -27,7 +47,10 @@ NAICS_ACCOMMODATION = "721"
 CBP_URL_TEMPLATE = "https://api.census.gov/data/{year}/cbp"
 ACS_URL = f"https://api.census.gov/data/{ACS5_YEAR}/acs/acs5"
 
-DEMO_VARS = "NAME,B19013_001E,B01002_001E,B14001_001E,B14001_008E,B14001_009E"
+DEMO_VARS = (
+    "NAME,B19013_001E,B01002_001E,B14001_001E,B14001_008E,B14001_009E,"
+    "B23025_003E,B23025_005E,B25064_001E"
+)
 
 # Earlier ACS5 vintage for the population-growth covariate: roughly 5 years
 # before the current vintage, giving a real multi-year comparison window
@@ -67,7 +90,8 @@ def fetch_demographics_national(force: bool = False) -> Path:
     dest = RAW_DIR / f"demographics_{ts}.csv"
     df.to_csv(dest, index=False)
     log_fetch(source="acs5_demographics", url=ACS_URL, dest_path=str(dest), row_count=len(df),
-              notes=f"national, year={ACS5_YEAR}: median income, median age, college enrollment")
+              notes=f"national, year={ACS5_YEAR}: median income, median age, college enrollment, "
+                    "labor force/unemployed counts, median gross rent")
     return dest
 
 
@@ -131,7 +155,7 @@ def _load_pop_growth() -> pd.DataFrame:
 def load_county_covariates() -> pd.DataFrame:
     """County-level covariates keyed by (state, county) FIPS: tourism_estab,
     median_household_income, median_age, college_enrollment_share, density_per_sqmi,
-    pop_growth_pct.
+    pop_growth_pct, unemployment_rate, median_gross_rent.
     """
     tourism_path = fetch_tourism_national()
     tourism = pd.read_csv(tourism_path, dtype={"state": str, "county": str})
@@ -145,15 +169,24 @@ def load_county_covariates() -> pd.DataFrame:
     demo["county"] = demo["county"].str.zfill(3)
     # ACS uses large negative sentinels (e.g. -666666666) for suppressed/inapplicable
     # cells (typically counties too small to estimate reliably) — never average these in.
-    for col in ["B19013_001E", "B01002_001E", "B14001_001E", "B14001_008E", "B14001_009E"]:
+    for col in ["B19013_001E", "B01002_001E", "B14001_001E", "B14001_008E", "B14001_009E",
+                "B23025_003E", "B23025_005E", "B25064_001E"]:
         demo[col] = pd.to_numeric(demo[col], errors="coerce")
         demo.loc[demo[col].isin(ACS_MISSING_SENTINELS), col] = pd.NA
     demo["median_household_income"] = demo["B19013_001E"]
     demo["median_age"] = demo["B01002_001E"]
     demo["college_enrollment_share"] = (demo["B14001_008E"] + demo["B14001_009E"]) / demo["B14001_001E"]
+    # Unemployment rate = unemployed / civilian labor force (B23025_005E / B23025_003E).
+    # A zero-size labor force (rare, small-population counties) would divide to inf/NaN
+    # rather than a spurious 0% or 100% rate -- left as NaN and dropped like any other
+    # ACS suppression, not silently zero-filled.
+    demo["unemployment_rate"] = demo["B23025_005E"] / demo["B23025_003E"]
+    demo.loc[demo["B23025_003E"] == 0, "unemployment_rate"] = pd.NA
+    demo["median_gross_rent"] = demo["B25064_001E"]
 
     df = demo[["state", "county", "NAME", "median_household_income", "median_age",
-               "college_enrollment_share"]].merge(tourism, on=["state", "county"], how="left")
+               "college_enrollment_share", "unemployment_rate", "median_gross_rent"]].merge(
+        tourism, on=["state", "county"], how="left")
     df["tourism_estab"] = df["tourism_estab"].fillna(0)
     df["county_geoid"] = df["state"] + df["county"]
 
