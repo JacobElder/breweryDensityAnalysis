@@ -1208,3 +1208,140 @@ pooled fallback in `capture_rate_model.py` is unchanged; the adjacency
 infrastructure is kept as a validated prototype in case the calibrated
 count grows enough to revisit this with more per-state neighbors to draw
 on.
+
+## 17. Development history and bugs found
+
+This codebase went through a 4-agent parallel correctness audit (statistical
+modeling, data-source pipeline, build/analysis scripts, documentation), a
+follow-up manual review, a second round of agent-driven work (6 parallel
+agents: 3 new calibration states, a pytest suite, LOSO validation, CBSA/place
+tables, plus a multi-source capture model investigation and an OBDB/OSM
+union checker), a third round adding 4 more calibration states (IL, CA, NY,
+VA) out of 10 investigated, a fourth round (4 parallel agents) applying
+the correction model at national scale for the first time, adding a
+calibration-confidence layer to the interactive map, testing what drives
+state-level capture-rate variation, and further refining the union checker's
+matching algorithm, a fifth round (6 parallel agents plus collision-aware
+choropleth labeling done directly) adding a spatial hot-spot clustering
+analysis, the inverse "brewery deserts" ranking, a state-level rollup
+table, a three-panel raw/shrunken/corrected comparison figure, a
+population-growth Model B covariate (tested, clean null), and a fourth
+round of union-checker matching fixes, and a sixth round adding a
+searchable/sortable table view to the interactive map, a Bayesian spatial
+(ICAR) alternative to the flat-mean shrinkage prior, and 10 more calibration
+states/DC (KY, FL, CT, MA, MO, NE, NJ, WV, WY, DC) found via a systematic
+second-pass investigation of every remaining state — bringing the total to
+23. That last piece surfaced a real lesson about this project's own
+process, not just the pipeline: several of the calibration agents'
+self-reported capture-rate percentages didn't match their own saved
+data (most notably Missouri, self-reported as a normal ~54% state but
+actually 166% — an inverted ratio — and Massachusetts, self-reported as a
+clipped >100% state but actually a normal 83%), caught only because the
+central model refit — deliberately kept as a single, non-parallelized step
+specifically to avoid this class of error — reproduced all 13 pre-existing
+states' values almost exactly, giving a trustworthy baseline against which
+the new states' numbers could be checked rather than taken on faith. A
+seventh round added two more Model B covariates (unemployment rate,
+significant; median rent, null) after investigating and correctly rejecting
+a third (county wet/dry status — no usable bulk source), tried and rejected
+a geographically-informed capture-rate correction after honest LOSO
+validation showed it didn't beat the existing model, and merged the CAR
+model's spatial term with Model B's covariates into one BYM2 model —
+adopted as the project's new headline county ranking after it beat all
+three simpler alternatives on held-out log-likelihood, including a real
+finding that Model B's covariates alone actually generalize *worse* than
+the flat national mean. Real bugs caught across all seven rounds:
+
+- A normal-approximation confidence interval on a skewed Gamma posterior that
+  materially understated uncertainty for low-count counties/places (now
+  exact Gamma quantiles).
+- An ACS suppressed-data sentinel (`-666666666`) that could have silently
+  corrupted the adults-21+ denominator for small geographies.
+- A FIPS zero-padding strip that would have broken joins if a caller didn't
+  defensively re-pad downstream.
+- The capture-rate correction model mixing an exposure-weighted aggregate
+  ratio with an unweighted regression slope (internally inconsistent by
+  construction — now a single weighted regression supplies both), and that
+  same model's point estimate silently exceeding 1.0 for very dense counties
+  (now hard-capped at 1.0, which turned out to matter for a second, different
+  reason once Texas was added — see Key Findings).
+- Two bugs in the OBDB/OSM record-matching pipeline (missing-geocoding and
+  incomplete name-suffix stripping), found while building the union checker
+  and fixed in the shared `capture_recapture.py` module.
+- A CBSA-level ID-format mismatch in the interactive map's geometry generator
+  (path IDs and data IDs used different Census ID formats, silently zero
+  matches) and a `Boulder County County, CO`-style double-suffix bug in an
+  early draft of the top-50 table, both caught by direct verification before
+  publishing.
+- `census_geocoder.py`'s batch geocoding crashed with a `KeyError` whenever
+  an entire address batch came back with zero matches (a real case: 3 rural
+  New York addresses that Census's own geocoder can't resolve) — the
+  coordinates column has no comma to split on when every row is `No_Match`,
+  so the second column silently doesn't exist. Found while adding New York
+  as a calibration state; fixed to reindex the split result so both columns
+  always exist regardless of match rate.
+- Virginia's independent cities (Fairfax, Franklin, Richmond, Roanoke each
+  have both a same-named city and county) collide under TIGER's bare county
+  name — the capture-rate model's land-area join used the bare name for
+  every state, which would have silently failed to match 8 Virginia
+  county/city rows (dropping them from the correction model with no error)
+  because Virginia's own data uses the "city"/"County"-suffixed name to
+  disambiguate. Fixed by joining against both the bare name and the full
+  TIGER `NAMELSAD` for every state, rather than picking one convention. The
+  same bare-`NAME`-vs-`NAMELSAD` distinction resurfaced when adding
+  data-driven choropleth labels (`map_labels.py`) — auto-generated labels
+  now use `NAMELSAD` for the same reason.
+- Comparing two ACS 5-year vintages (for the population-growth covariate)
+  surfaced a cross-vintage geography mismatch, not a code bug: Connecticut
+  switched from county-equivalents to "Planning Regions" as its official
+  Census geography after 2019, and two Alaska census areas were split out of
+  the former Valdez-Cordova Census Area around the same time — so 11
+  counties/regions have no earlier-vintage population value and are
+  correctly dropped (as `NaN`, not silently zeroed) from that covariate
+  rather than mismatched to the wrong geography.
+- The interactive map had no `<meta name="viewport">` tag at all — mobile
+  browsers default to rendering at a ~980px virtual layout width and
+  scaling the whole page down to fit the physical screen when this is
+  missing, which also meant every `max-width` mobile media query in the
+  stylesheet was silently inert on a real phone regardless of screen size.
+  Found from a user-reported screenshot of the map looking "weird" on
+  mobile — the header's four toggle-groups were wrapping onto five stacked
+  full-width rows, squeezing the map itself down to a sliver at the bottom.
+  Fixed by adding the meta tag and reworking the mobile layout (title
+  stacked above a single horizontally-scrollable control strip). A second,
+  related bug surfaced while verifying the fix: the scrollable control
+  strip's container wasn't actually containing its own overflow (a classic
+  nested-flexbox gap — a flex item with `overflow-x:auto` still needs an
+  explicit width constraint from its container to engage internal
+  scrolling instead of just growing past it), which was silently pushing
+  the entire page ~250px wider than the viewport. Caught by measuring
+  `document.body.scrollWidth` directly rather than trusting a visual
+  screenshot alone, since local headless-Chrome testing turned out to have
+  its own unrelated viewport-size quirk (a ~500px floor that ignored the
+  requested window size) that could easily have been mistaken for the same
+  bug or masked it entirely.
+- `tourism_estab_per_10k` (tourism establishments per 10,000 residents, a
+  Model B covariate) had no protection against small-denominator blowup —
+  a handful of tourism establishments in a county with a few hundred
+  residents produces a per-10k ratio with no real-world meaning (Mineral
+  County, CO: 12 establishments / 640 people = 164.6, vs. a national mean
+  of 3.9). Silently present in Model B since it was first built, never
+  caught because Model B's reported tables are always population-floored
+  at 50k adults, which happens to exclude every affected county. Surfaced
+  when the newly-adopted spatial+covariate model's *unfloored* output fed
+  this uncapped value into a log-linear predictor and produced a
+  983-breweries-per-100k point estimate for that county, which broke the
+  choropleth's legend and would have misled anyone reading the underlying
+  data file for that specific county. Fixed by winsorizing at the 99th
+  percentile (33 counties capped) in `build_national_county_dataset.py`,
+  which also quietly corrects Model B's own fitted values for those
+  counties even though Model B was never re-adopted as a standalone
+  ranking. A related, initially-suspected-but-ultimately-secondary issue
+  was also fixed alongside it: the model's posterior point estimate used
+  the mean of the rate samples rather than the median, which for a
+  low-exposure county with wide posterior uncertainty in its linear
+  predictor can be substantially inflated relative to the median (the
+  classic log-normal mean-vs-median gap) — switched to the median, standard
+  practice in Bayesian small-area disease-mapping for exactly this reason,
+  though the winsorization fix turned out to be the one that actually
+  mattered most for this specific case.
