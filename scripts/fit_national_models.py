@@ -6,7 +6,7 @@ A) Empirical Bayes Poisson-Gamma shrinkage of the raw rate (no covariates) —
 B) Negative-binomial GLM with covariates + state fixed effects, offset by
    log(adults_21plus) — ranked by residual (observed/expected), i.e. the
    "more breweries than expected after conditioning on tourism, age, income,
-   and state regulatory regime" list.
+   population growth, and state regulatory regime" list.
 """
 
 from __future__ import annotations
@@ -39,10 +39,10 @@ def fit_covariate_residual_model(df: pd.DataFrame) -> tuple[pd.DataFrame, object
     df["log_offset"] = np.log(df["adults_21plus"])
     df["log_income"] = np.log(df["median_household_income"])
     model_df = df.dropna(subset=["log_income", "median_age", "college_enrollment_share",
-                                  "tourism_estab_per_10k", "state_abbr"]).copy()
+                                  "tourism_estab_per_10k", "pop_growth_pct", "state_abbr"]).copy()
 
     formula = ("obdb_count ~ log_income + median_age + college_enrollment_share "
-               "+ tourism_estab_per_10k + C(state_abbr)")
+               "+ tourism_estab_per_10k + pop_growth_pct + C(state_abbr)")
     nb = smf.negativebinomial(formula, data=model_df, offset=model_df["log_offset"]).fit(
         method="bfgs", disp=0, maxiter=500)
 

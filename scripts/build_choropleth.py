@@ -10,6 +10,13 @@ Produces two versions:
   (a county can still land in the darkest bin off a handful of breweries), so
   this floored version is the more conservative one to read as a "where is
   density high" map.
+
+Labeling is collision-aware (src/breweries/map_labels.py), not a fixed list:
+the original face-validity cities are placed first as priority anchors, then
+the highest-rate remaining counties (population-floored) are added as space
+allows, skipping any that would land within ~80km of an anchor already placed
+(to avoid e.g. both "Boulder, CO" and its own county's auto-label competing
+for the same spot) or that would visually collide with another label.
 """
 
 from __future__ import annotations
@@ -20,13 +27,17 @@ import pandas as pd
 from matplotlib.colors import BoundaryNorm, LinearSegmentedColormap
 from matplotlib.patches import Patch
 
+from breweries.map_labels import LabelCandidate, place_labels
 from breweries.sources import tiger
 
 RANKINGS_PATH = "data/processed/us_county_shrunken_rankings.parquet"
 POPULATION_FLOOR = 50_000
+MAX_AUTO_LABELS = 22
+ANCHOR_EXCLUSION_RADIUS_M = 80_000  # ~50 miles; skip an auto-label this close to a placed anchor
 
 # Face-validity cities from the project handoff, plus a few discovered during
-# calibration (Boulder, Grand Traverse) — labeled to anchor the reader.
+# calibration (Boulder, Grand Traverse) — placed first, so they always win any
+# contested space against auto-generated labels.
 LABEL_CITIES = [
     ("Bend, OR", -121.3153, 44.0582),
     ("Asheville, NC", -82.5515, 35.5951),
@@ -47,13 +58,19 @@ INSUFFICIENT_POP_COLOR = "#bfbfbf"
 
 
 def load_county_geodata() -> gpd.GeoDataFrame:
-    counties = tiger.load_counties()[["STATEFP", "GEOID", "geometry"]]
+    # NAMELSAD (not the bare NAME) is used for auto-generated labels: Virginia's
+    # independent cities share a bare county name with a same-named county
+    # (e.g. both "Richmond city" and "Richmond County" have NAME="Richmond"),
+    # so labeling off NAME risks mislabeling a high-rate independent city as
+    # the wrong, much-lower-rate county. NAMELSAD disambiguates correctly
+    # everywhere (also handles Louisiana's "X Parish" naming).
+    counties = tiger.load_counties()[["STATEFP", "GEOID", "NAMELSAD", "geometry"]]
 
     rankings = pd.read_parquet(RANKINGS_PATH)
     rankings["county_geoid"] = rankings["county_geoid"].str.zfill(5)
 
     merged = counties.merge(
-        rankings[["county_geoid", "eb_posterior_rate_per_100k", "adults_21plus"]],
+        rankings[["county_geoid", "eb_posterior_rate_per_100k", "adults_21plus", "state_abbr"]],
         left_on="GEOID", right_on="county_geoid", how="left",
     )
     match_rate = merged["eb_posterior_rate_per_100k"].notna().mean()
@@ -61,17 +78,44 @@ def load_county_geodata() -> gpd.GeoDataFrame:
     return merged
 
 
-def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
+def build_auto_label_candidates(
+    conus_albers: gpd.GeoDataFrame, anchor_points_albers: list[tuple[float, float]],
+    value_col: str = "eb_posterior_rate_per_100k",
+) -> list[LabelCandidate]:
+    """Top-rate counties (population-floored), as label candidates in Albers
+    meters, excluding any within ANCHOR_EXCLUSION_RADIUS_M of a placed anchor.
+    """
+    pool = conus_albers[
+        (conus_albers["adults_21plus"] >= POPULATION_FLOOR) & conus_albers[value_col].notna()
+    ].sort_values(value_col, ascending=False)
+
+    candidates = []
+    for _, row in pool.iterrows():
+        cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
+        too_close = any(
+            ((cx - ax) ** 2 + (cy - ay) ** 2) ** 0.5 < ANCHOR_EXCLUSION_RADIUS_M
+            for ax, ay in anchor_points_albers
+        )
+        if too_close:
+            continue
+        label = f"{row['NAMELSAD']}, {row['state_abbr']}"
+        candidates.append(LabelCandidate(text=label, x=cx, y=cy, priority=float(row[value_col])))
+    return candidates
+
+
+def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
+               value_col: str = "eb_posterior_rate_per_100k", title_prefix: str = "US Brewery Density by County",
+               source_note: str | None = None) -> None:
     """Render the CONUS+AK+HI choropleth. If floor is set, counties with fewer
     adults_21plus than floor are drawn in a distinct gray instead of colored.
     """
     gdf = gdf.copy()
     if floor is not None:
         gdf["_below_floor"] = gdf["adults_21plus"] < floor
-        gdf["_value"] = gdf["eb_posterior_rate_per_100k"].where(~gdf["_below_floor"])
+        gdf["_value"] = gdf[value_col].where(~gdf["_below_floor"])
     else:
         gdf["_below_floor"] = False
-        gdf["_value"] = gdf["eb_posterior_rate_per_100k"]
+        gdf["_value"] = gdf[value_col]
 
     gdf_conus = gdf.to_crs(epsg=5070)  # CONUS Albers Equal Area
     territory_fips = {"02", "15", "72", "78", "60", "66", "69"}  # AK, HI, and island territories
@@ -79,7 +123,7 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
     alaska = gdf[gdf["STATEFP"] == "02"].to_crs(epsg=3338)
     hawaii = gdf[gdf["STATEFP"] == "15"].to_crs(epsg=3563)
 
-    values = gdf["eb_posterior_rate_per_100k"].dropna()
+    values = gdf[value_col].dropna()
     bins = [0, 1, 3, 6, 10, 15, values.max() + 1]
     labels = ["0-1", "1-3", "3-6", "6-10", "10-15", f"15-{values.max():.0f}"]
     norm = BoundaryNorm(bins, CMAP.N)
@@ -97,7 +141,7 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
     ax.set_facecolor("white")
     draw(ax, conus)
 
-    title = "US Brewery Density by County"
+    title = title_prefix
     subtitle = "Shrunken posterior rate per 100,000 adults 21+ (empirical Bayes, partial pooling toward national mean)"
     if floor is not None:
         title += " (population-floored)"
@@ -119,23 +163,43 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
         legend_elems.append(Patch(facecolor=INSUFFICIENT_POP_COLOR, edgecolor="#888888",
                                    label=f"< {floor:,} adults 21+"))
     legend_elems.append(Patch(facecolor=NO_DATA_COLOR, edgecolor="#888888", label="No data"))
-    ax.legend(handles=legend_elems, loc="lower left", bbox_to_anchor=(0.33, -0.02),
-              title="Breweries per 100k\nadults 21+", fontsize=9, title_fontsize=10, frameon=False)
+    legend = ax.legend(handles=legend_elems, loc="lower left", bbox_to_anchor=(0.33, -0.02),
+                        title="Breweries per 100k\nadults 21+", fontsize=9, title_fontsize=10, frameon=False)
 
+    # Reserve the legend's own footprint so auto-labels don't get placed on top of it.
+    fig.canvas.draw()
+    reserved = [legend.get_window_extent(renderer=fig.canvas.get_renderer())]
+
+    # Anchor cities first (always win contested space over auto-labels).
     cities_gdf = gpd.GeoDataFrame(
         {"label": [c[0] for c in LABEL_CITIES]},
         geometry=gpd.points_from_xy([c[1] for c in LABEL_CITIES], [c[2] for c in LABEL_CITIES]),
         crs="EPSG:4326",
     ).to_crs(epsg=5070)
-    for label, geom in zip(cities_gdf["label"], cities_gdf.geometry):
-        ax.plot(geom.x, geom.y, marker="o", markersize=4, color="black", zorder=5)
-        ax.annotate(label, (geom.x, geom.y), xytext=(5, 5), textcoords="offset points",
-                    fontsize=8, fontweight="bold", color="black", zorder=6)
+    anchor_candidates = [
+        LabelCandidate(text=label, x=geom.x, y=geom.y, priority=1e9 - i)
+        for i, (label, geom) in enumerate(zip(cities_gdf["label"], cities_gdf.geometry))
+    ]
+    n_anchors = place_labels(fig, ax, anchor_candidates, max_labels=len(anchor_candidates),
+                              reserved_boxes=reserved)
+
+    # Then data-driven top-rate counties, excluding anything too close to an anchor.
+    anchor_points = [(geom.x, geom.y) for geom in cities_gdf.geometry]
+    auto_candidates = build_auto_label_candidates(conus, anchor_points, value_col)
+    fig.canvas.draw()
+    reserved_after_anchors = reserved + [
+        t.get_window_extent(renderer=fig.canvas.get_renderer())
+        for t in ax.texts
+    ]
+    n_auto = place_labels(fig, ax, auto_candidates, max_labels=MAX_AUTO_LABELS,
+                           reserved_boxes=reserved_after_anchors)
+    print(f"  Labels placed: {n_anchors} anchors + {n_auto} auto (of {len(auto_candidates)} candidates)")
 
     fig.text(0.5, 0.01,
+              source_note or
               "Sources: Open Brewery DB, Census ACS 5-year (2020-2024), empirical Bayes shrinkage "
-              "calibrated on NC/MI/CO/OR state licensee data. OBDB undercounts true brewery count "
-              "by an estimated 7-38% depending on state (see methods memo) — this map is "
+              "calibrated on 13-state licensee data. OBDB undercounts true brewery count "
+              "by an amount that varies by state (see methods memo) — this map is "
               "uncorrected for that gap.",
               ha="center", fontsize=7.5, color="#555555", wrap=True)
 

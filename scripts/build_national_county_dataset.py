@@ -33,13 +33,13 @@ def main() -> None:
     covar = covariates.load_county_covariates()
     df = df.merge(
         covar[["county_geoid", "median_household_income", "median_age",
-               "college_enrollment_share", "tourism_estab", "sqmi"]],
+               "college_enrollment_share", "tourism_estab", "sqmi", "pop_growth_pct"]],
         on="county_geoid", how="left",
     )
     df["density_per_sqmi"] = df["total_population"] / df["sqmi"]
     df["tourism_estab_per_10k"] = df["tourism_estab"] / df["total_population"] * 10_000
 
-    # Apply the 4-state capture-rate correction model (see capture_rate_model.py):
+    # Apply the capture-rate correction model (see capture_rate_model.py):
     # calibrated states get their empirical rate, everyone else gets the pooled
     # rate + density adjustment with a wide uncertainty interval.
     log_density = np.log(df["density_per_sqmi"].clip(lower=0.1))
@@ -58,7 +58,8 @@ def main() -> None:
     df.to_parquet(out_path, index=False)
     print(f"Wrote {out_path} ({len(df)} counties)")
     print(f"Missing covariates: income={df['median_household_income'].isna().sum()}, "
-          f"age={df['median_age'].isna().sum()}, density={df['density_per_sqmi'].isna().sum()}")
+          f"age={df['median_age'].isna().sum()}, density={df['density_per_sqmi'].isna().sum()}, "
+          f"pop_growth_pct={df['pop_growth_pct'].isna().sum()}")
     print(f"Total OBDB breweries assigned to a county: {df['obdb_count'].sum()}")
 
 

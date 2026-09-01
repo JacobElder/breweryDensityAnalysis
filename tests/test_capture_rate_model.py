@@ -160,10 +160,13 @@ class TestDensityClipRegression:
         # real-world example of this density), so passing "NY" would exercise
         # the calibrated branch (ci_high=None) instead of the clip logic this
         # test targets -- use an uncalibrated state so the density-driven
-        # extrapolation path is what's actually under test.
-        assert "NJ" not in CALIBRATED_STATE_CAPTURE_RATES
+        # extrapolation path is what's actually under test. (NJ was this
+        # test's example state originally, but a later round of calibration
+        # added NJ as a directly-measured state -- AL remains uncalibrated,
+        # confirmed no bulk open-data source.)
+        assert "AL" not in CALIBRATED_STATE_CAPTURE_RATES
         manhattan_log_density = np.log(72_000)
-        result = correction_factor("NJ", log_density=manhattan_log_density)
+        result = correction_factor("AL", log_density=manhattan_log_density)
         assert result["capture_rate"] <= 1.0
         assert result["capture_rate"] >= 0.0
         assert result["ci_high"] <= 1.0

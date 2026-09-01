@@ -31,6 +31,33 @@ STATE_FIPS = {
     "AZ": "04",
     "MN": "27",
     "SC": "45",
+    "LA": "22",
+    "ME": "23",
+    "MD": "24",
+    "MA": "25",
+    "MO": "29",
+    "MT": "30",
+    "HI": "15",
+    "ID": "16",
+    "IN": "18",
+    "IA": "19",
+    "KS": "20",
+    "KY": "21",
+    "OK": "40",
+    "RI": "44",
+    "SD": "46",
+    "UT": "49",
+    "WV": "54",
+    "WY": "56",
+    "DC": "11",
+    "NE": "31",
+    "NV": "32",
+    "NH": "33",
+    "NJ": "34",
+    "NM": "35",
+    "ND": "38",
+    "FL": "12",
+    "CT": "09",
 }
 
 CBP_YEAR = 2023  # latest available CBP vintage as of this pipeline (verified via api.census.gov/data.json)
@@ -60,5 +87,16 @@ def get(url: str, params: dict) -> pd.DataFrame:
     params = {**params, "key": api_key()}
     resp = requests.get(url, params=params, timeout=60)
     resp.raise_for_status()
+    # CBP returns an empty 204 body (not JSON) when every county/NAICS cell for the
+    # requested state is suppressed or genuinely zero (observed for WV NAICS 312120) --
+    # treat that as zero matching rows rather than crashing on json.JSONDecodeError,
+    # so callers see a clean empty-but-typed frame instead of an opaque parse error.
+    if resp.status_code == 204 or not resp.text.strip():
+        cols = [c.strip() for c in params["get"].split(",")]
+        if "for" in params:
+            geo_col = params["for"].split(":")[0]
+            if geo_col not in cols:
+                cols = cols + [geo_col]
+        return pd.DataFrame(columns=cols)
     rows = resp.json()
     return pd.DataFrame(rows[1:], columns=rows[0])

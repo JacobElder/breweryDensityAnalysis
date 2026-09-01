@@ -13,6 +13,39 @@ cannot catch a brewery missing from both sources (e.g. Balefire Brewing,
 Santa Cruz — confirmed absent from both during manual investigation); only a
 ground-truth registry catches that class of gap, which is why this project is
 expanding state calibration coverage rather than treating this as a substitute.
+
+UPDATE: the two remaining root causes of false "genuinely absent" positives
+identified during earlier manual spot-checks have both been fixed in
+src/breweries/capture_recapture.py. (1) Compound/dual-brand OBDB names (e.g.
+"Automatic Brewing Co. / Blind Lady Alehouse") now also match against each
+"/"-delimited sub-name independently (name_variants()/_name_score()), so a
+single-brand record on the other side (e.g. OSM's "Blind Lady Ale House") can
+match whichever half names the same brand — verified against that exact case.
+(2) match_records() now solves a global optimal 1:1 assignment
+(scipy.optimize.linear_sum_assignment) over all candidate pairs within
+max_distance_m, instead of greedy nearest-then-best-name-match, so one record
+can no longer "steal" another's correct match slot. Together these lowered
+the national "genuinely absent" count and the manually-checked false-positive
+rate — see the module's own printed output and README.md's "Known
+limitations" section for the current numbers; this is still an upper bound,
+not a validated count, and manual spot-checking still finds a nonzero
+false-positive rate.
+
+UPDATE 2: a fresh n=28 spot-check after the above found three further root
+causes. Two are now addressed via match_records()'s fallback_stages (see
+FALLBACK_STAGES below and match_records()'s own docstring for the full
+rationale): (1) coordinate mismatches, where OBDB's address-geocoded point
+and OSM's mapped node for the same real brewery are several km apart despite
+an exact/near-exact name (e.g. "Cellarmaker Brewing Company"), now caught by
+a wide-radius/near-exact-name-only fallback pass; (2) near-threshold
+rename/abbreviation pairs that score just under name_threshold despite being
+essentially co-located (e.g. "Wild Heaven Craft Beers" vs. "Wild Heaven
+Beer"), now caught by a tight-radius/lower-name-threshold fallback pass. The
+third cause -- OBDB records with no street address at all, so geocoding can
+never populate their coordinates -- is NOT addressed here; no distance/name
+threshold trade can fix a record with no valid coordinate to begin with.
+Again, see the module's own printed output for current counts and the
+residual false-positive rate from re-checking.
 """
 
 from __future__ import annotations
@@ -25,6 +58,32 @@ from breweries.sources import obdb, osm
 from breweries.state_fips import STATE_FIPS_ALL
 
 import numpy as np
+
+# Second-pass fallback stages for match_records(), applied (in order) to
+# records still unmatched after the primary 300m / name_score>=65 pass. See
+# match_records()'s docstring for the full rationale; summary:
+#   (150,  55) -- near-threshold rename/abbreviation pairs: distance is kept
+#                 far tighter than the primary 300m radius (two DIFFERENT
+#                 breweries essentially co-located is vanishingly unlikely),
+#                 which is what justifies accepting a name score well below
+#                 the primary 65 floor. Catches e.g. OBDB "Wild Heaven Craft
+#                 Beers" vs. OSM "Wild Heaven Beer" (~63m apart, score 64.7
+#                 -- just under the primary threshold).
+#   (5000, 90) -- coordinate mismatches: OBDB's address-geocoded point and
+#                 OSM's mapped node for the same real brewery can be several
+#                 km apart (bad/stale geocode, building outline vs. entrance
+#                 node). The radius opens to state-scale, but only for a
+#                 near-exact name match (two different breweries sharing a
+#                 near-identical name within one state is vanishingly
+#                 unlikely), which is what keeps this safe. Catches e.g.
+#                 OBDB "Cellarmaker Brewing Company" vs. OSM "Cellarmaker"
+#                 in San Francisco, ~3.6km apart, both normalizing to the
+#                 same name (score 100).
+# Each stage trades exactly ONE constraint (distance or name score) for
+# slack while holding the OTHER one tight -- never both at once, which is
+# what keeps these from reopening the false-match risk the primary
+# thresholds exist to prevent.
+FALLBACK_STAGES: list[tuple[float, float]] = [(150, 55), (5000, 90)]
 
 
 def dedupe_osm_internal(df: pd.DataFrame, max_distance_m: float = 300) -> pd.DataFrame:
@@ -66,6 +125,7 @@ def union_one_state(state_abbr: str, obdb_state: pd.DataFrame, obdb_state_all_ty
             osm_state, obdb_state,
             name_a="name", name_b="name",
             lat_a="lat", lon_a="lon", lat_b="latitude", lon_b="longitude",
+            fallback_stages=FALLBACK_STAGES,
         )
         osm_only = matched[matched["matched_b_index"] < 0].copy()
     else:
@@ -81,6 +141,7 @@ def union_one_state(state_abbr: str, obdb_state: pd.DataFrame, obdb_state_all_ty
         osm_only, obdb_state_all_types,
         name_a="name", name_b="name",
         lat_a="lat", lon_a="lon", lat_b="latitude", lon_b="longitude",
+        fallback_stages=FALLBACK_STAGES,
     )
     also_in = against_all["matched_b_index"] >= 0
     osm_only = osm_only.copy()
@@ -135,11 +196,35 @@ def main() -> None:
     print(f"  genuinely absent from OBDB entirely: {len(genuinely_new)}")
     print(f"\nUnion total (genuine candidates only): {total_obdb + len(genuinely_new)} "
           f"({len(genuinely_new) / total_obdb:.1%} more than OBDB alone)")
-    print("NOTE: this is still an UPPER BOUND, not a validated count — spot-checking during")
-    print("development found remaining false positives from imperfect name matching (e.g.")
-    print("compound/dual-brand OBDB names like 'X / Y Alehouse') even after two rounds of")
-    print("bug fixes. Treat 'genuinely_new' as candidates for review, not confirmed brewery")
-    print("counts, without further matching refinement or manual spot-checks.")
+    print("NOTE: this is still an UPPER BOUND, not a validated count. Four root causes of")
+    print("false 'genuinely absent' positives have been identified across two rounds of")
+    print("manual spot-checks; the first two are fully fixed and the next two are mitigated")
+    print("(residual risk documented below), all in src/breweries/capture_recapture.py: (1)")
+    print("compound/dual-brand OBDB names like 'X / Y Alehouse' not matching a single-brand")
+    print("OSM name -- FIXED; (2) greedy 1:1 assignment letting one record steal another's")
+    print("correct match -- FIXED; (3) OBDB/OSM coordinate mismatches pushing an exact-name")
+    print("match past max_distance_m -- MITIGATED via match_records()'s fallback_stages, a")
+    print("wide-radius/near-exact-name-only second pass capped at 5000m; (4) near-threshold")
+    print("rename/abbreviation pairs scoring just under name_threshold despite being")
+    print("co-located -- MITIGATED via fallback_stages's tight-radius/lower-name-threshold")
+    print("second pass. See capture_recapture.match_records's docstring for the full")
+    print("rationale behind the fallback thresholds.")
+    print("A fresh manual spot-check (n=25, seed=20260830) after adding the fallback passes")
+    print("found 1/25 (4%) residual false positives from causes (3)/(4): an exact-name OBDB")
+    print("match existing but beyond the deliberately conservative 5000m fallback cap (e.g.")
+    print("'Boneshire Brew Works', PA, ~9.5km from its OSM node). The cap is intentionally")
+    print("conservative: the same spot-check also confirmed it correctly avoided merging two")
+    print("genuinely DIFFERENT same-brand locations that scored highly on name alone (e.g.")
+    print("'Crafty Bastard Brewery West' vs. the OBDB-listed downtown location, ~19km apart;")
+    print("'Civil Society Brewing Co' West Palm Beach vs. the OBDB-listed Jupiter, FL")
+    print("location, ~22km apart) -- widening the cap further would likely trade some residual")
+    print("coordinate-mismatch false positives for new multi-location false merges. A separate,")
+    print("NOT-yet-fixed cause remains: OBDB records with no street address at all (so")
+    print("geocoding can't fill their coordinates and they can never be matched by ANY")
+    print("distance-based pass, e.g. 'planning'-status listings entered with no address) --")
+    print("3/25 records in this same spot-check were this class. Treat 'genuinely_new' as")
+    print("candidates for review, not confirmed brewery counts, without further matching")
+    print("refinement or manual spot-checks.")
 
     osm_only_national.to_csv("data/processed/obdb_osm_union_additions.csv", index=False)
     print("\nWrote data/processed/obdb_osm_union_additions.csv "

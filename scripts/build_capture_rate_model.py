@@ -13,8 +13,14 @@ population than "OBDB-listed craft breweries," which shows up as a raw
 capture rate at or above 100% (kept in the pooled model rather than excluded
 without a principled reason — cherry-picking would be worse — but flagged
 here and in the methods memo):
-- WI: DOR's "Brewery" permit type sweeps in some non-craft manufacturers
-  (e.g. Anheuser-Busch's Milwaukee plant). Raw ratio 116.6%.
+- MO: MO ATC's "Microbrewery" license category structurally excludes the
+  state's large/regional breweries (Anheuser-Busch, Boulevard Brewing hold
+  no license in this category), leaving several counties with OBDB-observed
+  breweries but zero matching licensees. Raw ratio 166.2%, the highest of
+  any calibration state.
+- WY: brewers only need a wholesaler license if they self-distribute
+  (W.S. 12-4-201); a brewery using a third-party distributor never appears
+  on this source. Raw ratio 128.6%.
 - TX: TABC's public license table is documented by TABC itself to exclude
   brewpub subordinate authorizations, so the reference undercounts, not
   OBDB overcounting. Raw ratio 122.2%.
@@ -27,14 +33,21 @@ here and in the methods memo):
 - IL: ILCC's export is cumulative (includes expired licenses filtered by
   expiration date, no explicit status column) and companion license classes
   (base "Brewer" + a production-tier overlay) can double-list one physical
-  site despite dedup — raw ratio 108.6%, the mildest of the four.
+  site despite dedup — raw ratio 108.6%.
+- WV: 100.0% exactly, at the boundary rather than clearly over it — ABCA's
+  list is a dated PDF snapshot (~13 months stale as of this fetch), so this
+  isn't read as meaningfully different from the >100% states above.
 
-States investigated and confirmed to have no bulk open-data source (only an
-interactive per-record search tool that this project's rules forbid
-scripting around) and are NOT calibration states: MS, OH, VT, MN. TN, AZ,
-and SC also have no state licensee source, but do have OBDB/OSM/CBP-only
-datasets (`build_{state}_county_dataset.py`) used elsewhere for face-validity
-checks, not for this capture-rate model.
+States investigated and confirmed to have no bulk open-data source (an
+interactive-only search tool, a login-gated portal, bot/WAF protection, or
+no centralized state-level registry at all) and are NOT calibration states:
+MS, OH, VT, MN, TN, AZ, SC (first round investigated), plus AL, AK, AR, DE,
+HI, ID, IN, IA, KS, LA, ME, MD, MT, NV, NH, NM, ND, OK, RI, SD, UT (second,
+broader round covering every remaining state). TN, AZ, and SC also have
+OBDB/OSM/CBP-only datasets (`build_{state}_county_dataset.py`) used
+elsewhere for face-validity checks, not for this capture-rate model. See
+docs/methods_memo.md Section 8 for the specific reason each state was
+excluded.
 """
 
 from __future__ import annotations
@@ -59,11 +72,23 @@ STATE_LICENSEE_COL = {
     "CA": "liquor_count",
     "NY": "liquor_count",
     "VA": "liquor_count",
+    "KY": "liquor_count",
+    "FL": "liquor_count",
+    "CT": "liquor_count",
+    "MA": "liquor_count",
+    "MO": "liquor_count",
+    "NE": "liquor_count",
+    "NJ": "liquor_count",
+    "WV": "liquor_count",
+    "WY": "liquor_count",
+    "DC": "liquor_count",
 }
 STATE_FIPS = {
     "NC": "37", "MI": "26", "CO": "08", "OR": "41",
     "WA": "53", "TX": "48", "GA": "13", "WI": "55", "PA": "42",
     "IL": "17", "CA": "06", "NY": "36", "VA": "51",
+    "KY": "21", "FL": "12", "CT": "09", "MA": "25", "MO": "29",
+    "NE": "31", "NJ": "34", "WV": "54", "WY": "56", "DC": "11",
 }
 
 

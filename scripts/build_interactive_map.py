@@ -12,15 +12,42 @@ lighter than embedding one).
 from __future__ import annotations
 
 import json
+import re
 
 import pandas as pd
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.affinity import affine_transform
 
+from breweries.capture_rate_model import CALIBRATED_STATE_CAPTURE_RATES
 from breweries.sources import tiger
 
 TERRITORY_FIPS = {"02", "15", "72", "78", "60", "66", "69"}
 SIMPLIFY_TOLERANCE_M = 1500
+
+# Census CBSA titles always end "<city list>, <ST[-ST...]> Metro/Micro Area",
+# with one state abbreviation per constituent county's state (deduped),
+# hyphen-joined in the order Census lists them — e.g. "Charlotte-Concord-
+# Gastonia, NC-SC Metro Area". Parsing the title avoids needing a separate
+# CBSA-to-county crosswalk just to know which states a CBSA touches.
+_CBSA_STATE_RE = re.compile(r",\s*([A-Z]{2}(?:-[A-Z]{2})*)\s+(?:Metro|Micro)\s+Area\s*$")
+
+
+def cbsa_states(cbsa_name: str) -> list[str]:
+    m = _CBSA_STATE_RE.search(cbsa_name)
+    return m.group(1).split("-") if m else []
+
+
+def state_capture_rate(state_abbr: str | None) -> float | None:
+    """Calibrated capture rate for a state, clipped to 1.0 like correction_factor()
+    does (a capture rate is a fraction of a true population and can't exceed 1.0
+    by definition — see capture_rate_model.py's docstring for why several raw
+    calibration values exceed 1.0). Returns None if the state has no direct
+    calibration (i.e. it would fall back to the pooled/extrapolated rate).
+    """
+    if state_abbr is None:
+        return None
+    rate = CALIBRATED_STATE_CAPTURE_RATES.get(state_abbr)
+    return round(min(rate, 1.0), 3) if rate is not None else None
 
 
 def fit_transform(bounds, target_w, target_h, pad=0.02):
@@ -122,6 +149,8 @@ def load_county_data() -> dict:
 
     out = {}
     for _, r in df.iterrows():
+        state_abbr = r["state_abbr"] if pd.notna(r["state_abbr"]) else None
+        capture_rate = state_capture_rate(state_abbr)
         out[r["county_geoid"]] = {
             "name": r["county_name"],
             "state": r["state_abbr"],
@@ -133,6 +162,11 @@ def load_county_data() -> dict:
             "ciHigh": round(float(r["eb_ci_high_per_100k"]), 2),
             "rank": int(r["rank_all"]),
             "rankFloored": int(r["rank_floored"]) if pd.notna(r["rank_floored"]) else None,
+            # Calibration confidence: whether this county's state has a real,
+            # independently-measured OBDB capture rate (CALIBRATED_STATE_CAPTURE_RATES)
+            # vs. the much less certain pooled/extrapolated rate every other state uses.
+            "calibrated": capture_rate is not None,
+            "captureRate": capture_rate,
         }
     return out
 
@@ -144,6 +178,25 @@ def load_cbsa_data() -> dict:
     df["rank_all"] = df.index + 1
     out = {}
     for _, r in df.iterrows():
+        states = cbsa_states(r["cbsa_name"])
+        rates = [state_capture_rate(s) for s in states]
+        calibrated_rates = [rt for rt in rates if rt is not None]
+        # A CBSA can span multiple states (e.g. "Charlotte-Concord-Gastonia,
+        # NC-SC"). "full" = every constituent state independently calibrated
+        # (captureRate = mean of those states' rates — an approximation when
+        # >1 state, since the map shows one number per CBSA); "partial" = some
+        # but not all constituent states calibrated; "none" = none are. Only
+        # "full" is treated as calibrated for the map's visual indicator, since
+        # a CBSA is only as trustworthy as its least-calibrated constituent state.
+        if states and len(calibrated_rates) == len(states):
+            calib_status = "full"
+            capture_rate = round(sum(calibrated_rates) / len(calibrated_rates), 3)
+        elif calibrated_rates:
+            calib_status = "partial"
+            capture_rate = None
+        else:
+            calib_status = "none"
+            capture_rate = None
         out[r["cbsa_geoid"]] = {
             "name": r["cbsa_name"],
             "count": int(r["obdb_count"]),
@@ -151,6 +204,10 @@ def load_cbsa_data() -> dict:
             "raw": round(float(r["obdb_rate_per_100k_21plus"]), 2),
             "shrunk": round(float(r["eb_posterior_rate_per_100k"]), 2),
             "rank": int(r["rank_all"]),
+            "states": states,
+            "calibrated": calib_status == "full",
+            "calibStatus": calib_status,
+            "captureRate": capture_rate,
         }
     return out
 
@@ -176,6 +233,7 @@ def main() -> None:
         "countyData": county_data,
         "cbsaPaths": cbsa_paths,
         "cbsaData": cbsa_data,
+        "calibratedStates": sorted(CALIBRATED_STATE_CAPTURE_RATES),
     }
     out_path = "data/processed/interactive_map_data.json"
     with open(out_path, "w") as f:

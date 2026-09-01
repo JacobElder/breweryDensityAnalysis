@@ -1,12 +1,13 @@
-"""OBDB coverage-correction model, fit on 13 calibration states
-(NC, MI, CO, OR, WA, TX, GA, WI, PA, IL, CA, NY, VA).
+"""OBDB coverage-correction model, fit on 23 calibration states/jurisdictions
+(NC, MI, CO, OR, WA, TX, GA, WI, PA, IL, CA, NY, VA, KY, FL, CT, MA, MO, NE,
+NJ, WV, WY, DC).
 
 Model: log((obdb_count + 0.5) / (licensee_count + 0.5)) ~ log(population_density),
 weighted by licensee_count (WLS), fit in scripts/build_capture_rate_model.py.
 
 Three honest findings drive how this is used, not just the point estimates:
 
-1. Population density has a real but small effect (coef ~0.066, p<0.001): denser
+1. Population density has a real but small effect (coef ~0.062, p<0.001): denser
    counties have higher OBDB capture rates, i.e. OBDB undercounts rural areas more.
 2. State identity dominates over density. A fixed-effects model's state
    intercepts vary far more than the density gradient across its full observed
@@ -25,8 +26,17 @@ population than "OBDB-listed craft breweries," which shows up as a raw
 capture rate at or above 100% (kept in the model rather than dropped without
 a principled statistical reason — but flagged clearly):
 
-- **Wisconsin** (116.6%): WI DOR's "Brewery" permit type sweeps in some
-  non-craft manufacturers (e.g. Anheuser-Busch's Milwaukee plant).
+- **Wyoming** (128.6%): brewers only need a wholesaler license if they
+  self-distribute (W.S. 12-4-201) — a brewery using a third-party
+  distributor never appears on WY's own wholesaler-list source, so the list
+  itself undercounts, not evidence OBDB over-counts.
+- **Missouri** (166.2%): MO ATC's "Primary Alcohol License" export's
+  Microbrewery category structurally excludes the state's large/regional
+  breweries (Anheuser-Busch, Boulevard Brewing hold no license in this
+  category) — several MO counties have OBDB-observed breweries but zero
+  matching licensees for this reason, which both drives the aggregate ratio
+  above 100% and excludes those counties from the pooled regression fit
+  (licensee_count=0 is undefined for a log-ratio model).
 - **Texas** (122.2%): TABC's public license table is documented (by TABC's
   own license-consolidation materials) to exclude brewpub subordinate
   authorizations attached to a retail permit — the reference undercounts,
@@ -37,6 +47,11 @@ a principled statistical reason — but flagged clearly):
   beer-manufacturer license incidentally (e.g. large wineries).
 - **Virginia** (120.1%): ABC's export similarly counts licensed *premises*;
   several brands hold multiple Virginia sites (e.g. one operator with 5).
+- **West Virginia** (100.0%, at the boundary rather than over it): ABCA's
+  "Resident Brewers" list is a dated PDF snapshot (~13 months stale as of
+  this fetch) rather than a live query, so a small amount of drift in either
+  direction is expected and this isn't read as a meaningfully different case
+  from the >100% states above.
 - **Illinois** (108.6%): ILCC's export is cumulative (active status inferred
   from expiration date, no explicit status column) and companion license
   classes (a base "Brewer" license plus a production-tier overlay) can
@@ -50,19 +65,27 @@ purpose of the correction.
 
 Consequence: county density is NOT a reliable basis for a national per-county
 correction on its own — state-level regulatory/market factors this project
-hasn't measured explain most of the variation, and 13 states is still not a
+hasn't measured explain most of the variation, and 23 states is still not a
 lot for a state-level covariate model. For states with their own calibration
 data, use the state-specific empirical capture rate directly. For all other
 states, this module returns the WLS-regression pooled rate with a wide
 interval derived from the between-state random-effect variance — explicitly
-wide, because that's what a 13-group sample actually supports.
+wide, because that's what a 23-group sample actually supports.
 
 States investigated and confirmed to have no bulk open-data source (only an
 interactive per-record search tool this project's rules forbid scripting
-around) and are NOT calibration states: MS, OH, VT, MN. TN, AZ, and SC also
-lack a state licensee source but do have OBDB/OSM/CBP-only county datasets
+around, a login-gated portal, or no centralized state-level registry at all)
+and are NOT calibration states: MS, OH, VT, MN, TN, AZ, SC (first round),
+plus AL, AK, AR, DE, HI, ID, IN, IA, KS, LA, ME, MD, MT, NV, NH, NM, ND, OK,
+RI, SD, UT (a second, broader round covering every remaining state). TN, AZ,
+and SC additionally have an OBDB/OSM/CBP-only county dataset
 (`build_{state}_county_dataset.py`) used for face-validity checks elsewhere,
-not for this model.
+not for this model; the second-round states do not, since by that point the
+project had already established the face-validity pattern didn't need
+repeating for every uncalibrated state. See docs/methods_memo.md Section 8
+for the specific reason each one was excluded (interactive-only portal,
+bot/WAF protection, no centralized registry, decommissioned open-data site,
+etc. — the reasons vary meaningfully and are not interchangeable).
 """
 
 from __future__ import annotations
@@ -88,15 +111,25 @@ CALIBRATED_STATE_CAPTURE_RATES = {
     "CA": 0.600,
     "NY": 0.665,
     "VA": 0.465,
+    "KY": 0.536,
+    "FL": 0.760,
+    "CT": 0.579,
+    "MA": 0.828,
+    "MO": 1.662,
+    "NE": 0.758,
+    "NJ": 0.748,
+    "WV": 1.000,
+    "WY": 1.286,
+    "DC": 0.643,
 }
 
 # From the WLS fit (weights=licensee_count) in scripts/build_capture_rate_model.py —
 # both drawn from the SAME model so the baseline and the density adjustment are
 # internally consistent (see module docstring point 3 for why this isn't just the
 # raw aggregate ratio).
-POOLED_CAPTURE_RATE = 0.593  # WLS intercept prediction at mean log_density
-LOG_DENSITY_COEF = 0.066  # WLS slope, per unit increase in log(people per sq mi)
-BETWEEN_STATE_LOG_SD = np.sqrt(0.0897)  # ~0.300, REML group-variance estimate, 13 groups (unweighted MixedLM; see build script)
+POOLED_CAPTURE_RATE = 0.610  # WLS intercept prediction at mean log_density
+LOG_DENSITY_COEF = 0.062  # WLS slope, per unit increase in log(people per sq mi)
+BETWEEN_STATE_LOG_SD = np.sqrt(0.1062)  # ~0.326, REML group-variance estimate, 23 groups (unweighted MixedLM; see build script)
 
 
 def correction_factor(state: str, log_density: float | None = None) -> dict:
@@ -147,7 +180,7 @@ def _mean_log_density() -> float:
     # Mean log(density) across the calibration-state counties used to fit the
     # model; centers the density adjustment so the pooled rate applies at the
     # average density rather than at density=1/sqmi.
-    return 4.839  # ~126 people/sqmi, from data/processed/pooled_calibration_with_density.parquet
+    return 4.876  # ~131 people/sqmi, from data/processed/pooled_calibration_with_density.parquet
 
 
 def apply_correction(obdb_count: int, state: str, log_density: float | None = None) -> dict:

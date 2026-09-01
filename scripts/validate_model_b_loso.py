@@ -4,7 +4,7 @@ Model B (see scripts/fit_national_models.py::fit_covariate_residual_model) is a
 negative-binomial GLM:
 
     obdb_count ~ log_income + median_age + college_enrollment_share
-                 + tourism_estab_per_10k + C(state_abbr)
+                 + tourism_estab_per_10k + pop_growth_pct + C(state_abbr)
 
 offset by log(adults_21plus), ranked by shrunken residual (observed/expected) to
 produce the "more breweries than covariates predict" list reported in the README
@@ -71,10 +71,11 @@ DATA_PATH = "data/processed/us_county_analysis.parquet"
 OUTPUT_PATH = "data/processed/model_b_loso_validation.parquet"
 POPULATION_FLOOR = 50_000
 
-COVARS = ["log_income", "median_age", "college_enrollment_share", "tourism_estab_per_10k"]
+COVARS = ["log_income", "median_age", "college_enrollment_share", "tourism_estab_per_10k",
+          "pop_growth_pct"]
 FORMULA = (
     "obdb_count ~ log_income + median_age + college_enrollment_share "
-    "+ tourism_estab_per_10k + C(state_abbr)"
+    "+ tourism_estab_per_10k + pop_growth_pct + C(state_abbr)"
 )
 STATE_TERM_RE = re.compile(r"C\(state_abbr\)")
 
@@ -97,7 +98,7 @@ def prep_model_df(df: pd.DataFrame) -> pd.DataFrame:
     df["log_income"] = np.log(df["median_household_income"])
     model_df = df.dropna(
         subset=["log_income", "median_age", "college_enrollment_share",
-                "tourism_estab_per_10k", "state_abbr"]
+                "tourism_estab_per_10k", "pop_growth_pct", "state_abbr"]
     ).copy()
     return model_df
 
