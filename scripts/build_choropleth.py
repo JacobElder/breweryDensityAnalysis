@@ -156,9 +156,9 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
                 "per 100,000 adults 21+")
     if floor is not None:
         title += " (population-floored)"
-        subtitle = (f"Counties under {floor:,} adults 21+ shown gray, not colored — covariate "
+        subtitle = (f"Counties under {floor:,} adults 21+ shown gray, not colored; covariate "
                     "and spatial smoothing reduce but don't eliminate small-county noise")
-    ax.set_title(f"{title}\n{subtitle}", fontsize=14, fontweight="bold", pad=14)
+    ax.set_title(title, fontsize=17, fontweight="bold", pad=12)
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
     draw(ax_ak, alaska)
@@ -174,7 +174,10 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
         legend_elems.append(Patch(facecolor=INSUFFICIENT_POP_COLOR, edgecolor="#888888",
                                    label=f"< {floor:,} adults 21+"))
     legend_elems.append(Patch(facecolor=NO_DATA_COLOR, edgecolor="#888888", label="No data"))
-    legend = ax.legend(handles=legend_elems, loc="lower left", bbox_to_anchor=(0.33, -0.02),
+    # Bottom-right corner of the CONUS axes lands over the Atlantic/Gulf, ocean
+    # space with no county polygons -- previously bottom-left near x=0.33 sat
+    # almost directly under Texas.
+    legend = ax.legend(handles=legend_elems, loc="lower right", bbox_to_anchor=(0.99, 0.01),
                         title="Breweries per 100k\nadults 21+", fontsize=9, title_fontsize=10, frameon=False)
 
     # Reserve the legend's own footprint so auto-labels don't get placed on top of it.
@@ -206,17 +209,15 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
                            reserved_boxes=reserved_after_anchors)
     print(f"  Labels placed: {n_anchors} anchors + {n_auto} auto (of {len(auto_candidates)} candidates)")
 
-    fig.text(0.5, 0.01,
-              source_note or
+    caption = subtitle + ". " + (source_note or
               "Sources: Open Brewery DB, Census ACS 5-year (2020-2024). County rate is the "
-              "project's adopted headline model — income, age, college share, tourism, "
+              "project's adopted headline model: income, age, college share, tourism, "
               "population growth, unemployment, and rent covariates plus state fixed effects "
               "and a BYM2 spatial random effect (neighboring counties inform each other's "
               "estimate), validated by held-out log-likelihood against three simpler "
-              "alternatives (see methods memo Section 15). OBDB undercounts true brewery count "
-              "by an amount that varies by state (see methods memo Section 5) — this map is "
-              "uncorrected for that gap.",
-              ha="center", fontsize=6.8, color="#555555", wrap=True)
+              "alternatives. OBDB undercounts true brewery count by an amount that varies by "
+              "state; this map is uncorrected for that gap.")
+    fig.text(0.5, 0.01, caption, ha="center", fontsize=6.8, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
