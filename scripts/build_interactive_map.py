@@ -84,7 +84,12 @@ def geom_to_path(geom, transform) -> str:
 
 
 def build_county_layer():
-    gdf = tiger.load_counties()
+    # CARTOGRAPHIC BOUNDARY geometry (shoreline-clipped), not TIGER/Line:
+    # TIGER carries legal boundaries that extend counties across open water,
+    # which fills the Great Lakes and Chesapeake Bay with county colour. See
+    # breweries.sources.tiger and methods memo Section 18.1. Display only --
+    # spatial joins and contiguity graphs still use tiger.load_counties().
+    gdf = tiger.load_cb_counties()
     conus = gdf[~gdf["STATEFP"].isin(TERRITORY_FIPS)].to_crs(epsg=5070)
     conus = conus.copy()
     conus["geometry"] = conus.simplify(SIMPLIFY_TOLERANCE_M)

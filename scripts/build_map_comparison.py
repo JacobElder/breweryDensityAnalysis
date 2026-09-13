@@ -54,14 +54,25 @@ CMAP = LinearSegmentedColormap.from_list(
     ["#fff5e6", "#ffe0a3", "#ffc266", "#f2932e", "#c96a15", "#8a4008", "#4d2004"],
 )
 NO_DATA_COLOR = "#e8e8e8"
-INSUFFICIENT_POP_COLOR = "#bfbfbf"
+# Below-floor counties are drawn as hatched white, NOT grey: the old #bfbfbf
+# had relative luminance 0.521 against the "3-6 per 100k" bin's 0.516, making
+# the single most common colour on the map optically identical to a mid-scale
+# value. See methods memo Section 18.2.
+BELOW_FLOOR_FACE = "#ffffff"
+BELOW_FLOOR_HATCH = "///"
+BELOW_FLOOR_EDGE = "#b0b0b0"
 
 # AK, HI, and island territories -- dropped for this CONUS-only comparison figure.
 TERRITORY_FIPS = {"02", "15", "72", "78", "60", "66", "69"}
 
 
 def load_data() -> gpd.GeoDataFrame:
-    counties = tiger.load_counties()[["STATEFP", "GEOID", "geometry"]]
+    # CARTOGRAPHIC BOUNDARY geometry (shoreline-clipped), not TIGER/Line:
+    # TIGER carries legal boundaries that extend counties across open water,
+    # which fills the Great Lakes and Chesapeake Bay with county colour. See
+    # breweries.sources.tiger and methods memo Section 18.1. Display only --
+    # spatial joins and contiguity graphs still use tiger.load_counties().
+    counties = tiger.load_cb_counties()[["STATEFP", "GEOID", "geometry"]]
 
     raw = pd.read_parquet(RAW_RANKINGS_PATH)
     raw["county_geoid"] = raw["county_geoid"].str.zfill(5)
@@ -137,7 +148,8 @@ def main() -> None:
                    edgecolor="#888888", linewidth=0.15, missing_kwds={"color": NO_DATA_COLOR})
         below = conus[conus["_below_floor"]]
         if len(below):
-            below.plot(ax=ax, color=INSUFFICIENT_POP_COLOR, edgecolor="#888888", linewidth=0.15)
+            below.plot(ax=ax, color=BELOW_FLOOR_FACE, edgecolor=BELOW_FLOOR_EDGE,
+                         linewidth=0.15, hatch=BELOW_FLOOR_HATCH)
         ax.set_axis_off()
         ax.set_title(f"{title}\n{subtitle}", fontsize=11.5, fontweight="bold", pad=8)
 
@@ -150,7 +162,8 @@ def main() -> None:
 
     legend_elems = [Patch(facecolor=CMAP(norm((bins[i] + bins[i + 1]) / 2)), edgecolor="#888888",
                            label=labels[i]) for i in range(len(labels))]
-    legend_elems.append(Patch(facecolor=INSUFFICIENT_POP_COLOR, edgecolor="#888888",
+    legend_elems.append(Patch(facecolor=BELOW_FLOOR_FACE, edgecolor=BELOW_FLOOR_EDGE,
+                                   hatch=BELOW_FLOOR_HATCH,
                                label=f"< {POPULATION_FLOOR:,} adults 21+"))
     legend_elems.append(Patch(facecolor=NO_DATA_COLOR, edgecolor="#888888", label="No data"))
     fig.legend(handles=legend_elems, loc="lower center", ncol=len(legend_elems),

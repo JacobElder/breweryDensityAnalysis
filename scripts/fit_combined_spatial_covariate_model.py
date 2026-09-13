@@ -116,6 +116,7 @@ import os
 for _env_var in ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMBA_NUM_THREADS"):
     os.environ.setdefault(_env_var, "1")
 
+import gc
 import time
 import warnings
 
@@ -139,6 +140,16 @@ HOTSPOTS_PATH = "data/processed/us_county_spatial_hotspots.csv"
 OUT_RANKINGS = "data/processed/us_county_combined_model_rankings.parquet"
 OUT_HOLDOUT_COMPARISON = "data/processed/us_county_combined_holdout_comparison.csv"
 OUT_COMPARISON = "data/processed/us_county_raw_vs_combined_rankings.csv"
+OUT_CALIBRATION = "data/processed/us_county_combined_calibration.csv"
+
+# Whether the production fit carries the capture-rate offset (see fit_nb_model).
+# With it on, the state fixed effect stops absorbing OBDB's state-level
+# coverage gap, and the reported rate is a TRUE brewery rate rather than an
+# OBDB-observed one -- which is a change in what the headline number means,
+# not just how it is estimated. Left OFF by default so the headline stays the
+# observed-scale quantity the README documents; the holdout table reports the
+# variant either way so the decision is evidence-led.
+CAPTURE_RATE_OFFSET = False
 
 # Same CONUS filter used by build_spatial_hotspots.py / fit_spatial_car_model.py.
 TERRITORY_FIPS = {"02", "15", "72", "78", "60", "66", "69"}
@@ -146,6 +157,29 @@ TERRITORY_FIPS = {"02", "15", "72", "78", "60", "66", "69"}
 COVARIATE_COLS = [
     "log_income", "median_age", "college_enrollment_share", "tourism_estab_per_10k",
     "pop_growth_pct", "unemployment_rate", "median_gross_rent",
+    # log_density added after the first public release of the map. Its absence
+    # was the model's single largest defect: with NO urbanicity term anywhere
+    # in the linear predictor, the only way the model could express "cities
+    # have more breweries per adult than the farmland around them" was through
+    # the BYM2 spatial effect -- and an ICAR prior's whole job is to SMOOTH
+    # spatial variation toward neighbours. So the model was made to represent a
+    # sharp urban/rural discontinuity with the one component built to erase it.
+    #
+    # The damage was one-directional and concentrated in exactly the counties
+    # readers recognise. Among the 173 counties with >=10 observed breweries,
+    # the fitted rate came in BELOW the raw rate 69% of the time (median ratio
+    # 0.87); in the top quintile of raw rate the median cut was 32%. Buncombe
+    # County NC (Asheville) observed 33 breweries against a fitted expectation
+    # of 19.7; Fulton County GA (Atlanta) observed 28 against 12.0 (p<0.001
+    # under the model's own posterior). Nine of 107 well-observed counties fell
+    # outside their own 95% interval on the high side, against a nominal 2.5%.
+    # Readers noticed -- "you have St Louis in the 3-6 per 100k range, that
+    # should be 10-15" was a correct reading of a real bias, not a misreading.
+    #
+    # Population density per square mile is already computed upstream in
+    # build_national_county_dataset.py; it was simply never wired in here.
+    # Logged because the raw scale spans ~0.04 to ~72,000 per sq mi.
+    "log_density",
 ]
 POPULATION_FLOOR = 50_000
 SEED = 42
@@ -155,7 +189,16 @@ TEST_FRACTION = 0.20
 # (rhat <= 1.067 on both folds) and exist only to compare held-out
 # log-likelihood across models, not to produce trustworthy point estimates,
 # so there's no reason to spend extra compute re-running them.
-DRAWS, TUNE, CHAINS, TARGET_ACCEPT = 2000, 2000, 4, 0.95
+# Raised from 2,000x4, but only modestly: four of these run in sequence after
+# the production fit, and each one's trace has to fit alongside whatever the
+# run is still holding. 3,000x4 = 12,000 draws is ~0.56GB, freed between fits.
+# They exist only to rank models on held-out log-likelihood, which depends on
+# mu_full -- already well converged even at the old settings -- so this is not
+# on the critical path for correctness. Raised at all because the density
+# variants reported beta rhat up to 1.157, and a model comparison that ships
+# with a convergence warning invites the reader to discount the comparison
+# rather than the warning.
+DRAWS, TUNE, CHAINS, TARGET_ACCEPT = 3000, 2500, 4, 0.95
 
 # The FINAL production fit is what the project's headline ranking is drawn
 # from, so it gets a longer run: the first attempt at these settings left
@@ -168,7 +211,86 @@ DRAWS, TUNE, CHAINS, TARGET_ACCEPT = 2000, 2000, 4, 0.95
 # samples), and a higher target_accept (smaller NUTS steps, better able to
 # navigate the tighter posterior geometry around the partially-identified
 # state-FE/spatial-effect boundary flagged in this script's own report).
+#
+# RAISED AGAIN after diagnosing exactly which parameters were mixing badly,
+# because "the fit warns about rhat" and "the published numbers are wrong" are
+# very different problems and this model only ever had the first one.
+#
+# At 4,000x6 the warning came entirely from the 49 STATE FIXED EFFECTS
+# (median ess_bulk 262, max rhat 1.063). Everything else was clean:
+#
+#   covariate betas (all 8, incl. log_density)  rhat 1.00, ess 5,553-15,167
+#   theta_iid                                   rhat 1.002, ess 21,536
+#   mu_full  <- THE PUBLISHED QUANTITY          rhat <=1.003, ess 2,716-39,082
+#
+# mu_full is what every rate, interval, ranking and map colour is computed
+# from, and it was already converged: the state intercept and a county's
+# spatial term are each individually wobbly, but their SUM -- which is what
+# enters mu -- is pinned. So no published number was affected.
+#
+# Three structural explanations for the state-FE mixing were tested and all
+# three were WRONG, which is why this is brute force rather than a
+# reparameterization:
+#   - a global state-FE vs spatial-level ridge: corr = -0.04 (not it)
+#   - a per-state version of the same: median corr = +0.02 (not it)
+#   - funnel/hyperparameter coupling: |corr| < 0.14 vs sigma_bym, rho, alpha
+# Per-chain means for the worst parameter (TX) span 0.135 against a within-
+# chain sd of 0.29, and drift smoothly within each chain -- chains agree and
+# are exploring the same region, just slowly. That is ordinary autocorrelation,
+# and for autocorrelation the only lever is more draws (ess scales ~linearly).
+#
+# SIZED TO THE MACHINE BY MEASUREMENT, after two OOM kills from sizing it by
+# arithmetic. This is a 16GB box with ~4-6GB actually free (Chrome alone holds
+# ~2GB), and the peak is trace + a copy during xarray conversion + one resident
+# worker process per parallel chain. Two failed attempts:
+#
+#   16,000 x 6 = 96,000 draws, mu_full stored  -> 6.7GB trace   -> killed
+#    8,000 x 6 = 48,000 draws, mu_full dropped -> 2.24GB trace  -> killed
+#
+# The only footprint known to complete here is the ~1.68GB of the original
+# 4,000 x 6 run. Dropping the mu_full Deterministic cut the per-draw cost by a
+# third (9,384 -> 6,275 floats), which buys draws at constant memory rather
+# than buying memory:
+#
+#   6,000 x 6 = 36,000 draws, mu_full dropped  -> 1.68GB trace  <- exactly the
+#                                                                  proven size
+#
+# So: 1.5x the draws of the original at identical memory. Expect state-FE
+# ess ~390 median / ~110 min and rhat ~1.04 -- an improvement, enough to report
+# per-state coefficients with a stated caveat, NOT the <1.01 that would make
+# them pristine.
+#
+# Brute force cannot get further on this hardware: 4x more draws again would
+# need ~7GB of trace. If the state coefficients ever need to be
+# publication-grade on their own, the right move is a DEDICATED fit that stores
+# only `beta` (57 floats/draw instead of 6,275, so 100k+ draws are trivial),
+# not a bigger version of this one. Nothing published depends on it either way
+# -- mu_full, which every rate and map colour comes from, reached ess
+# 2,716-39,082 and rhat <=1.003 at the ORIGINAL settings.
 FINAL_DRAWS, FINAL_TUNE, FINAL_CHAINS, FINAL_TARGET_ACCEPT = 4000, 4000, 6, 0.97
+# Sequential chains: see the `cores` note in fit_nb_model. Costs wall-clock
+# (~50min instead of ~20) and is what lets the SAMPLING stage fit in memory
+# here at all -- it held 0.59GB RSS versus three OOM kills with parallel
+# workers.
+#
+# RESULT OF THE LONGER-CHAIN ATTEMPT, recorded so it is not retried blindly:
+# at 6,000x6 the sampling stage completed fine (2,997s, 0.59GB) and then the
+# run was OOM-killed in POST-PROCESSING -- `idata.to_netcdf()` on a 1.68GB
+# trace, on a box with ~2.8GB free. Four attempts at more draws were killed
+# in total. Draws are therefore back at the value proven to complete
+# end-to-end (4,000x6), which with mu_full no longer stored costs 1.12GB
+# rather than the original 1.68GB, i.e. strictly more headroom than the run
+# that worked.
+#
+# So longer chains are NOT achievable for this pipeline on this machine, and
+# the ceiling is the post-processing peak, not the sampler. Nothing published
+# depends on it: mu_full -- every rate, interval and map colour -- reached
+# ess 2,716-39,082 and rhat <=1.003 at exactly these settings. Only the 49
+# state fixed effects mix slowly (ess ~262, rhat ~1.06), and they appear in no
+# output except the state-FE diagnostic. The route to publication-grade state
+# coefficients is a DEDICATED fit storing only `beta` (57 floats/draw instead
+# of 6,275), where 100k+ draws are trivial.
+FINAL_CORES = 1
 
 pd.set_option("display.width", 160)
 pd.set_option("display.max_columns", 20)
@@ -212,8 +334,12 @@ def load_conus_graph_with_covariates() -> tuple[pd.DataFrame, np.ndarray]:
     W = w.full()[0].astype(int)
 
     merged["log_income"] = np.log(merged["median_household_income"])
+    # Guard the log: density is population/sqmi and a handful of Alaska-scale
+    # CONUS counties round to near-zero, which would otherwise send log_density
+    # to -inf and silently poison the z-scoring for every county.
+    merged["log_density"] = np.log(merged["density_per_sqmi"].clip(lower=0.01))
     raw_cov_cols = ["log_income", "median_age", "college_enrollment_share", "tourism_estab_per_10k",
-                     "pop_growth_pct", "unemployment_rate", "median_gross_rent"]
+                     "pop_growth_pct", "unemployment_rate", "median_gross_rent", "log_density"]
     merged["covariate_imputed"] = merged[raw_cov_cols].isna().any(axis=1)
     n_imputed = int(merged["covariate_imputed"].sum())
     for col in raw_cov_cols:
@@ -247,7 +373,9 @@ def compute_bym2_scale(W: np.ndarray) -> float:
     return scale
 
 
-def build_design_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray, np.ndarray]:
+def build_design_matrix(
+    df: pd.DataFrame, cov_cols: list[str] | None = None,
+) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray, np.ndarray]:
     """Design matrix for covariates + state FE, shared by the combined PyMC
     model and the Model B statsmodels replicate fit inside this script (same
     covariate spec as scripts/fit_national_models.py::fit_covariate_residual_model).
@@ -265,11 +393,12 @@ def build_design_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str], np.nda
     beta0-vs-state-mean non-identifiability that would arise from including
     both).
     """
+    cov_cols = list(COVARIATE_COLS if cov_cols is None else cov_cols)
     df = df.copy()
-    for col in COVARIATE_COLS:
+    for col in cov_cols:
         df[col] = (df[col] - df[col].mean()) / df[col].std()
 
-    formula = "0 + " + " + ".join(COVARIATE_COLS) + " + C(state_abbr)"
+    formula = "0 + " + " + ".join(cov_cols) + " + C(state_abbr)"
     design = patsy.dmatrix(formula, data=df, return_type="dataframe")
     X = design.values.astype(float)
     colnames = list(design.columns)
@@ -290,7 +419,9 @@ def fit_nb_model(
     y: np.ndarray, log_exposure: np.ndarray, W: np.ndarray, scale: float, train_idx: np.ndarray,
     *, X: np.ndarray | None, prior_mu: np.ndarray | None, prior_sigma: np.ndarray | None,
     is_state_col: np.ndarray | None = None,
+    log_capture_rate: np.ndarray | None = None,
     spatial_type: str, draws: int, tune: int, chains: int, target_accept: float, label: str,
+    cores: int | None = None,
 ) -> az.InferenceData:
     """y_i ~ NegBinom(mu_i, alpha), log(mu_i) = log_exposure_i + linpred_i + spatial_i.
 
@@ -303,11 +434,35 @@ def fit_nb_model(
     a single scalar intercept (matches fit_spatial_car_model.py's spec
     exactly for the CAR-only comparison run).
 
+    If `log_capture_rate` is given it enters the offset alongside exposure, so
+    that
+
+        E[observed count] = adults * capture_rate * exp(linpred + spatial)
+
+    and the latent rate being modelled is the TRUE brewery rate rather than
+    the OBDB-observed one. This matters because OBDB's coverage varies by
+    state (measured capture rate runs from Virginia's 46% to Oregon's 93%),
+    and without the offset the state fixed effect cannot distinguish "this
+    state has few breweries" from "OBDB covers this state badly" -- it fits
+    the product of the two and the map then presents a measurement artifact
+    as brewery scarcity. Georgia is the clearest case: capture rate 0.476, and
+    its state FE moves by +0.72 when the same model is fit to corrected counts
+    (data/processed/us_county_combined_state_fe_redundancy.csv), which is
+    roughly log(1/0.476) -- i.e. essentially all of that state effect was
+    coverage, not beer.
+
+    NOTE on what the output then means: with the offset in, mu_full is an
+    expected OBSERVED count and `mu_full / (exposure * capture_rate)` is the
+    estimated true rate. The caller decides which of the two to publish; see
+    `CAPTURE_RATE_OFFSET` and the holdout table.
+
     Only `train_idx` rows contribute to the likelihood; mu_full (a
     Deterministic over ALL N counties) is what the holdout evaluation and the
     final rankings both read from the posterior.
     """
     N = len(y)
+    if log_capture_rate is not None:
+        log_exposure = log_exposure + log_capture_rate
     train_mean_log_rate = float(np.log(y[train_idx].sum() / np.exp(log_exposure[train_idx]).sum()))
 
     with pm.Model():
@@ -339,12 +494,29 @@ def fit_nb_model(
             raise ValueError(f"unknown spatial_type {spatial_type!r}")
 
         log_mu = log_exposure + linpred + spatial_term
-        mu_full = pm.Deterministic("mu_full", pm.math.exp(log_mu))
-        pm.NegativeBinomial("obs", mu=mu_full[train_idx], alpha=alpha, observed=y[train_idx])
+        # mu_full is deliberately NOT stored as a Deterministic. At 3,109
+        # counties it is the same size as theta_iid/phi_icar, so storing it
+        # costs a third of the whole trace -- 6.7GB at 96,000 draws, which
+        # OOM-killed this fit on a 16GB machine. It is an exact function of
+        # parameters that ARE stored, so `posterior_alpha_mu` reconstructs it
+        # instead (in float32, which is ample for rates of order 1-100 per
+        # 100k). Dropping it buys ~33% more draws for the same memory.
+        mu_train = pm.math.exp(log_mu[train_idx])
+        pm.NegativeBinomial("obs", mu=mu_train, alpha=alpha, observed=y[train_idx])
 
         t0 = time.time()
+        # `cores` is the dominant memory lever in this script, not `draws`.
+        # Every parallel worker is a separate process holding its own copy of
+        # the compiled ~6,300-parameter model plus its own chain, so peak RSS
+        # scales with cores, while the trace scales with total draws. Three
+        # runs were OOM-killed here before that was measured rather than
+        # assumed -- including one at a trace size that had completed
+        # successfully earlier the same day, when the machine happened to have
+        # 6.2GB free instead of 4.3GB. Sequential chains (cores=1) trade
+        # wall-clock for a peak that fits.
         idata = pm.sample(
-            draws=draws, tune=tune, chains=chains, cores=min(chains, 4),
+            draws=draws, tune=tune, chains=chains,
+            cores=min(chains, 4) if cores is None else cores,
             target_accept=target_accept, random_seed=SEED, progressbar=False,
         )
         elapsed = time.time() - t0
@@ -385,10 +557,45 @@ def fit_nb_model(
     return idata
 
 
-def posterior_alpha_mu(idata: az.InferenceData) -> tuple[np.ndarray, np.ndarray]:
+def posterior_alpha_mu(
+    idata: az.InferenceData, *, X: np.ndarray | None, log_exposure: np.ndarray,
+    scale: float, spatial_type: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """alpha draws, and expected counts per (draw, county) reconstructed from
+    the stored parameters.
+
+    mu is no longer stored in the trace (see fit_nb_model) because it is the
+    single largest array there and is exactly recoverable:
+
+        mu = exp(log_exposure + linpred + spatial)
+
+    Returned as float32: these are counts of order 1e-2 to 1e2, where float32
+    carries ~7 significant digits, far more than the posterior's own width.
+    """
     post = idata.posterior
     alpha_samples = post["alpha"].values.reshape(-1)
-    mu_samples = post["mu_full"].values.reshape(-1, post["mu_full"].shape[-1])
+
+    if X is not None:
+        beta = post["beta"].values.reshape(-1, post["beta"].shape[-1])
+        linpred = (beta @ X.T).astype(np.float32)
+    else:
+        beta0 = post["beta0"].values.reshape(-1, 1)
+        linpred = np.broadcast_to(beta0, (beta0.shape[0], len(log_exposure))).astype(np.float32)
+
+    if spatial_type == "bym2":
+        sigma = post["sigma_bym"].values.reshape(-1, 1)
+        rho = post["rho"].values.reshape(-1, 1)
+        phi = post["phi_icar"].values.reshape(-1, phi_n := post["phi_icar"].shape[-1])
+        theta = post["theta_iid"].values.reshape(-1, phi_n)
+        spatial = (sigma * (np.sqrt(rho / scale) * phi + np.sqrt(1 - rho) * theta)).astype(np.float32)
+    elif spatial_type == "icar":
+        sigma_phi = post["sigma_phi"].values.reshape(-1, 1)
+        phi = post["phi"].values.reshape(-1, post["phi"].shape[-1])
+        spatial = (sigma_phi * phi).astype(np.float32)
+    else:
+        spatial = np.float32(0.0)
+
+    mu_samples = np.exp(log_exposure.astype(np.float32)[None, :] + linpred + spatial)
     return alpha_samples, mu_samples
 
 
@@ -410,6 +617,91 @@ def nb_holdout_loglik_mc(y: np.ndarray, alpha_samples: np.ndarray, mu_samples: n
     S = logpmf.shape[0]
     log_post_pred = logsumexp(logpmf, axis=0) - np.log(S)
     return float(np.mean(log_post_pred))
+
+
+# Strata for the stratified holdout report. The headline map only colours
+# counties at or above POPULATION_FLOOR, so a single all-counties average is
+# the wrong scoreboard for choosing the model that draws it.
+SIZE_STRATA = [
+    ("small (<50k adults, greyed on the map)", lambda d: d["adults_21plus"] < POPULATION_FLOOR),
+    ("mapped (>=50k adults)", lambda d: d["adults_21plus"] >= POPULATION_FLOOR),
+    ("well-observed (>=10 breweries)", lambda d: d["obdb_count"] >= 10),
+]
+
+
+def stratified_holdout_loglik(
+    df: pd.DataFrame, y: np.ndarray, alpha_samples: np.ndarray, mu_samples: np.ndarray,
+    test_idx: np.ndarray,
+) -> dict[str, float]:
+    """Held-out log-lik broken out by county size.
+
+    WHY: the original model comparison averaged held-out log-likelihood over
+    all 3,109 CONUS counties, ~75% of which sit below the map's own 50k
+    population floor and are never coloured. A spatial prior helps enormously
+    on those tiny counties (they carry almost no data, so borrowing from
+    neighbours is nearly free accuracy), so the all-counties average is
+    dominated by counties no reader ever looks at -- and it selected a model
+    that is measurably biased on the counties readers DO look at. Reporting
+    per-stratum scores makes that trade-off visible instead of averaging it
+    away.
+    """
+    out = {}
+    for name, predicate in SIZE_STRATA:
+        mask = predicate(df).to_numpy()
+        idx = np.array([i for i in test_idx if mask[i]])
+        out[name] = (nb_holdout_loglik_mc(y, alpha_samples, mu_samples, idx)
+                     if len(idx) else float("nan"))
+        out[f"n {name}"] = len(idx)
+    return out
+
+
+def posterior_predictive_calibration(
+    df: pd.DataFrame, y: np.ndarray, alpha_samples: np.ndarray, mu_samples: np.ndarray,
+    subset_idx: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Fraction of counties whose OBSERVED count falls outside the model's own
+    95% posterior predictive interval, by stratum and by direction.
+
+    A calibrated model puts ~2.5% of counties outside each tail. The published
+    model put 6.5% of mapped counties and 8.4% of well-observed counties above
+    their upper limit -- one-directionally, always understating the county.
+    That asymmetry is the numeric signature of the missing urbanicity
+    covariate, and this check exists so any future spec change has to face it
+    before the map is redrawn.
+
+    Note this is a posterior PREDICTIVE interval (includes NB sampling noise),
+    not the interval on the latent rate that the rankings file reports, so it
+    is the fair test of whether the model can reproduce what was observed.
+    """
+    rng = np.random.default_rng(SEED)
+    # Draw one predictive count per posterior draw per county, then take
+    # percentiles over draws. NB parameterised as in the likelihood above.
+    n_draws = min(len(alpha_samples), 2000)
+    sel = rng.choice(len(alpha_samples), n_draws, replace=False)
+    alpha = alpha_samples[sel][:, None]
+    mu = mu_samples[sel, :]
+    p = alpha / (alpha + mu)
+    pred = rng.negative_binomial(np.broadcast_to(alpha, mu.shape), p)
+    lo = np.percentile(pred, 2.5, axis=0)
+    hi = np.percentile(pred, 97.5, axis=0)
+
+    # `subset_idx` restricts the check to the counties that were actually in
+    # the likelihood. Without it, a TRAIN-FOLD fit gets scored against the
+    # held-out counties too, mixing in-sample calibration with out-of-sample
+    # and producing a number that means neither one.
+    in_fit = np.zeros(len(df), dtype=bool)
+    in_fit[np.arange(len(df)) if subset_idx is None else subset_idx] = True
+
+    rows = []
+    for name, predicate in SIZE_STRATA + [("all counties", lambda d: pd.Series(True, index=d.index))]:
+        mask = predicate(df).to_numpy() & in_fit
+        rows.append({
+            "stratum": name,
+            "n": int(mask.sum()),
+            "pct_above_95pct_PPI": float((y[mask] > hi[mask]).mean() * 100),
+            "pct_below_95pct_PPI": float((y[mask] < lo[mask]).mean() * 100),
+        })
+    return pd.DataFrame(rows).round(2)
 
 
 def model_a_holdout_loglik(y: np.ndarray, exposure: np.ndarray, train_idx: np.ndarray, test_idx: np.ndarray) -> float:
@@ -456,7 +748,7 @@ def model_b_holdout_loglik(
 
 def run_holdout_validation(
     df: pd.DataFrame, W: np.ndarray, scale: float, X: np.ndarray, prior_mu: np.ndarray, prior_sigma: np.ndarray,
-    is_state_col: np.ndarray,
+    is_state_col: np.ndarray, log_capture_rate: np.ndarray,
 ) -> pd.DataFrame:
     print("\n" + "=" * 70)
     print(f"HELD-OUT VALIDATION: seeded {int((1 - TEST_FRACTION) * 100)}/{int(TEST_FRACTION * 100)} "
@@ -486,26 +778,73 @@ def run_holdout_validation(
         X=None, prior_mu=None, prior_sigma=None, spatial_type="icar",
         draws=DRAWS, tune=TUNE, chains=CHAINS, target_accept=TARGET_ACCEPT, label="CAR-only-cv",
     )
-    alpha_car, mu_car = posterior_alpha_mu(idata_car_cv)
+    alpha_car, mu_car = posterior_alpha_mu(idata_car_cv, X=None, log_exposure=log_exposure,
+                                            scale=scale, spatial_type="icar")
     ll_car = nb_holdout_loglik_mc(y, alpha_car, mu_car, test_idx)
     print(f"CAR-only (pure ICAR, no covariates)         mean held-out log-lik: {ll_car:.4f} per county")
 
-    idata_combined_cv = fit_nb_model(
-        y, log_exposure, W, scale, train_idx,
-        X=X, prior_mu=prior_mu, prior_sigma=prior_sigma, is_state_col=is_state_col, spatial_type="bym2",
-        draws=DRAWS, tune=TUNE, chains=CHAINS, target_accept=TARGET_ACCEPT, label="combined-cv",
-    )
-    alpha_comb, mu_comb = posterior_alpha_mu(idata_combined_cv)
-    ll_combined = nb_holdout_loglik_mc(y, alpha_comb, mu_comb, test_idx)
-    print(f"Combined (covariates + state FE + BYM2)     mean held-out log-lik: {ll_combined:.4f} per county")
+    # The three BYM2 variants that differ in SPEC, not just in family: the
+    # published one, the same plus the urbanicity covariate it was missing,
+    # and that plus the capture-rate offset that de-confounds the state FE.
+    # Fit here so the choice between them is made on held-out evidence that is
+    # broken out by county size, rather than on a single average dominated by
+    # counties the map never colours.
+    cov_no_density = [c for c in COVARIATE_COLS if c != "log_density"]
+    X_nd, _, pmu_nd, psig_nd, isc_nd = build_design_matrix(df, cov_no_density)
 
-    results = pd.DataFrame({
-        "model": ["Model A (flat mean)", "Model B (covariates + state FE)", "CAR-only (pure ICAR)",
-                  "Combined (covariates + state FE + BYM2)"],
-        "held_out_loglik_per_county": [ll_a, ll_b, ll_car, ll_combined],
-    }).sort_values("held_out_loglik_per_county", ascending=False).reset_index(drop=True)
-    print("\nRanked (higher = better generalization):")
-    print(results.to_string(index=False))
+    variants = [
+        ("Combined as published (no density covariate)",
+         dict(X=X_nd, prior_mu=pmu_nd, prior_sigma=psig_nd, is_state_col=isc_nd,
+              log_capture_rate=None), "combined-published-cv"),
+        ("Combined + density covariate",
+         dict(X=X, prior_mu=prior_mu, prior_sigma=prior_sigma, is_state_col=is_state_col,
+              log_capture_rate=None), "combined-density-cv"),
+        ("Combined + density + capture-rate offset",
+         dict(X=X, prior_mu=prior_mu, prior_sigma=prior_sigma, is_state_col=is_state_col,
+              log_capture_rate=log_capture_rate), "combined-density-capture-cv"),
+    ]
+
+    rows = [
+        {"model": "Model A (flat mean)", "held_out_loglik_per_county": ll_a},
+        {"model": "Model B (covariates + state FE)", "held_out_loglik_per_county": ll_b},
+        {"model": "CAR-only (pure ICAR)", "held_out_loglik_per_county": ll_car},
+    ]
+    calibrations = []
+    for name, kwargs, label in variants:
+        idata = fit_nb_model(
+            y, log_exposure, W, scale, train_idx, spatial_type="bym2",
+            draws=DRAWS, tune=TUNE, chains=CHAINS, target_accept=TARGET_ACCEPT, label=label, **kwargs,
+        )
+        alpha_v, mu_v = posterior_alpha_mu(idata, X=kwargs["X"], log_exposure=log_exposure,
+                                           scale=scale, spatial_type="bym2")
+        ll = nb_holdout_loglik_mc(y, alpha_v, mu_v, test_idx)
+        row = {"model": name, "held_out_loglik_per_county": ll}
+        row.update(stratified_holdout_loglik(df, y, alpha_v, mu_v, test_idx))
+        rows.append(row)
+        print(f"{name:45s} mean held-out log-lik: {ll:.4f} per county")
+
+        # train_idx only: these are train-fold fits (see the note in
+        # posterior_predictive_calibration).
+        calib = posterior_predictive_calibration(df, y, alpha_v, mu_v, subset_idx=train_idx)
+        calib.insert(0, "model", name)
+        calibrations.append(calib)
+
+    results = pd.DataFrame(rows).sort_values(
+        "held_out_loglik_per_county", ascending=False).reset_index(drop=True)
+    print("\nRanked, ALL counties (higher = better generalization):")
+    print(results[["model", "held_out_loglik_per_county"]].to_string(index=False))
+
+    strat_cols = [c for c, _ in SIZE_STRATA]
+    print("\nSame fits, held-out log-lik BROKEN OUT BY COUNTY SIZE "
+          "(the map only colours the '>=50k adults' stratum):")
+    print(results[["model"] + strat_cols].dropna().round(4).to_string(index=False))
+
+    calib_all = pd.concat(calibrations, ignore_index=True)
+    calib_all.to_csv(OUT_CALIBRATION, index=False)
+    print("\nPosterior-predictive calibration -- %% of counties whose OBSERVED count falls "
+          "outside the model's own 95%% interval (a calibrated model: ~2.5%% per tail):")
+    print(calib_all.to_string(index=False))
+    print(f"\nWrote {OUT_CALIBRATION}")
     return results
 
 
@@ -558,16 +897,22 @@ def main() -> None:
 
     y = merged["obdb_count"].to_numpy(dtype=float)
     log_exposure = np.log(merged["adults_21plus"].to_numpy(dtype=float))
+    # Capture rate is bounded in (0, 1] upstream in capture_rate_model.py, so
+    # the log is always finite; clipped anyway so a future upstream change
+    # cannot silently introduce -inf into an offset.
+    log_capture_rate = np.log(merged["capture_rate"].to_numpy(dtype=float).clip(1e-3, 1.0))
     all_idx = np.arange(len(merged))
 
     print("\n" + "=" * 70)
     print("FINAL PRODUCTION FIT (all CONUS counties in the likelihood)")
+    print(f"  capture-rate offset: {'ON (rates are TRUE-scale)' if CAPTURE_RATE_OFFSET else 'off (rates are OBDB-observed scale)'}")
     print("=" * 70)
     idata_final = fit_nb_model(
         y, log_exposure, W, scale, all_idx,
         X=X, prior_mu=prior_mu, prior_sigma=prior_sigma, is_state_col=is_state_col, spatial_type="bym2",
+        log_capture_rate=log_capture_rate if CAPTURE_RATE_OFFSET else None,
         draws=FINAL_DRAWS, tune=FINAL_TUNE, chains=FINAL_CHAINS, target_accept=FINAL_TARGET_ACCEPT,
-        label="combined-final",
+        cores=FINAL_CORES, label="combined-final",
     )
     # Checkpoint immediately -- this is the expensive, longer-than-CV fit this
     # run exists to produce; everything after this point is comparatively
@@ -585,9 +930,21 @@ def main() -> None:
           f"{rho_summ.loc['rho', 'eti89_ub']:.3f}]")
     print(f"Posterior sigma_bym (overall spatial sd): mean={rho_summ.loc['sigma_bym', 'mean']:.3f}")
 
-    alpha_final, mu_final = posterior_alpha_mu(idata_final)
+    alpha_final, mu_final = posterior_alpha_mu(idata_final, X=X, log_exposure=log_exposure,
+                                               scale=scale, spatial_type="bym2")
     exposure = np.exp(log_exposure)
-    rate_samples = mu_final / exposure[None, :] * 100_000
+    # mu_full is always an expected OBSERVED count. Without the offset,
+    # mu/adults is the OBDB-observed rate. With the offset, mu already carries
+    # the capture rate, so dividing by adults alone still yields the
+    # observed-scale rate -- and the TRUE-scale rate needs the extra division
+    # by capture_rate. Made explicit so flipping CAPTURE_RATE_OFFSET changes
+    # the published quantity deliberately rather than by accident.
+    if CAPTURE_RATE_OFFSET:
+        rate_samples = mu_final / (exposure * np.exp(log_capture_rate))[None, :] * 100_000
+        print("NOTE: capture-rate offset is ON -- reported rates are TRUE-scale "
+              "(capture-corrected), not OBDB-observed.")
+    else:
+        rate_samples = mu_final / exposure[None, :] * 100_000
     # POSTERIOR MEDIAN, not mean, as the point estimate. mu_full is exp(linear
     # predictor) per posterior draw; for a low-exposure county with wide
     # posterior uncertainty in its linear predictor (this model's rho~0.97
@@ -607,6 +964,23 @@ def main() -> None:
     merged["combined_ci_high_per_100k"] = np.percentile(rate_samples, 97.5, axis=0)
     merged["spatial_smoothing_applied"] = True
 
+    # Release the production trace and its derived arrays BEFORE the holdout
+    # validation fits four more models. Holding idata_final (~2.4GB at
+    # production settings) plus mu_final and rate_samples across those fits is
+    # what pushed an earlier run into the OOM killer on a 16GB machine. The
+    # trace is already checkpointed to disk above, so nothing is lost; the
+    # calibration check below re-derives what it needs from the checkpoint.
+    _calibration_inputs = (alpha_final, mu_final)
+    calibration_final = posterior_predictive_calibration(
+        merged, y, *_calibration_inputs)
+    calibration_final.insert(0, "model", "PRODUCTION FIT (all counties)")
+    print("\nProduction-fit calibration -- % of counties whose OBSERVED count falls "
+          "outside the model's own 95% predictive interval (calibrated: ~2.5%/tail):")
+    print(calibration_final.to_string(index=False))
+
+    del idata_final, mu_final, rate_samples, _calibration_inputs
+    gc.collect()
+
     print("\nTop 20 counties by combined_posterior_rate_per_100k (population >= 50k):")
     top = merged[merged["adults_21plus"] >= POPULATION_FLOOR].sort_values(
         "combined_posterior_rate_per_100k", ascending=False)
@@ -615,7 +989,8 @@ def main() -> None:
           .head(20).to_string(index=False))
 
     # --- Held-out validation: all four models ----------------------------
-    holdout_results = run_holdout_validation(merged, W, scale, X, prior_mu, prior_sigma, is_state_col)
+    holdout_results = run_holdout_validation(merged, W, scale, X, prior_mu, prior_sigma,
+                                             is_state_col, log_capture_rate)
     holdout_results.to_csv(OUT_HOLDOUT_COMPARISON, index=False)
     print(f"\nWrote {OUT_HOLDOUT_COMPARISON}")
 

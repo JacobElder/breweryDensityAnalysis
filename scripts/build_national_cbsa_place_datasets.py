@@ -13,7 +13,7 @@ from breweries.sources.acs import AGE_VARS
 
 
 def build_cbsa() -> pd.DataFrame:
-    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded_clean.parquet")
     geocoded = geocoded.dropna(subset=["cbsa_geoid"])
     geocoded["cbsa_geoid"] = geocoded["cbsa_geoid"].str.split(".").str[0].str.zfill(5)
     counts = geocoded.groupby("cbsa_geoid").size().rename("obdb_count")
@@ -40,7 +40,7 @@ def build_cbsa() -> pd.DataFrame:
 
 
 def build_place() -> pd.DataFrame:
-    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded_clean.parquet")
     geocoded = geocoded.dropna(subset=["place_geoid"])
     geocoded["place_geoid"] = geocoded["place_geoid"].str.split(".").str[0].str.zfill(7)
     counts = geocoded.groupby("place_geoid").size().rename("obdb_count")

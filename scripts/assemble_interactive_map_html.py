@@ -7,6 +7,7 @@ data/processed/interactive_map_data.json.
 from __future__ import annotations
 
 import json
+import os
 
 with open("data/processed/interactive_map_data.json") as f:
     DATA = json.load(f)
@@ -886,9 +887,13 @@ document.getElementById('hiLabel').textContent = 'HI';
 </script>
 """
 
-out_path = "/private/tmp/claude-502/-Users-jacobelder-Documents-GitHub-breweryDensityAnalysis/ba2855b0-e31a-40ee-b366-2833f18caa1b/scratchpad/brewery_interactive_map.html"
+# Was hardcoded to a per-session scratchpad directory from the session that
+# first wrote this file, which stopped existing the moment that session
+# ended -- the script then failed with FileNotFoundError on every later
+# run. Writes next to the other rendered outputs instead.
+out_path = "data/processed/brewery_interactive_map.html"
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w") as f:
     f.write(HTML)
 
-import os
 print(f"Wrote {out_path} ({os.path.getsize(out_path) / 1e6:.2f}MB)")

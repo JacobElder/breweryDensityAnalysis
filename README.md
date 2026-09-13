@@ -16,29 +16,45 @@ the same county/CBSA data for finding a specific place by name rather than
 hunting visually; clicking a row jumps back to the map with that
 county/CBSA selected.
 
-![US brewery density by county, population-floored, adopted model](docs/images/choropleth.png)
+![US brewery density by county, adopted model, faded where the posterior interval is wide](docs/images/choropleth.png)
+
+The headline map colours every county and **fades the colour toward white as
+the model's own 95% interval widens**, so data-poor counties wash out rather
+than being hidden behind a flat grey. The earlier population-floored version
+(counties under 50,000 adults 21+ withheld) is still produced as
+`us_brewery_density_choropleth_floored.png`; see `docs/methods_memo.md`
+Section 18.2 for why it is no longer the default.
 
 **Top 15 counties** by the adopted model rate (population ≥ 50,000 adults 21+):
 
 | # | County | Breweries | Adults 21+ | Rate /100k |
 |---|---|---|---|---|
-| 1 | Tompkins County, NY | 6 | 73,002 | 16.1 |
-| 2 | Boulder County, CO | 47 | 244,536 | 14.9 |
-| 3 | Grafton County, NH | 11 | 71,816 | 14.5 |
-| 4 | Gallatin County, MT | 13 | 92,035 | 14.1 |
-| 5 | Deschutes County, OR | 30 | 161,952 | 11.9 |
-| 6 | Larimer County, CO | 36 | 276,735 | 11.9 |
-| 7 | Benton County, OR | 8 | 71,683 | 11.8 |
-| 8 | Warren County, NY | 6 | 52,451 | 11.8 |
-| 9 | Chittenden County, VT | 15 | 127,125 | 11.5 |
-| 10 | Hampshire County, MA | 14 | 116,741 | 11.4 |
-| 11 | Cumberland County, ME | 33 | 241,910 | 10.8 |
-| 12 | Chelan County, WA | 9 | 59,757 | 10.6 |
-| 13 | Cape May County, NJ | 8 | 76,026 | 10.4 |
-| 14 | Grand Traverse County, MI | 12 | 74,157 | 10.4 |
-| 15 | Multnomah County, OR | 78 | 636,020 | 10.3 |
+| 1 | Boulder County, CO | 47 | 244,536 | 15.0 |
+| 2 | Tompkins County, NY | 6 | 73,002 | 14.2 |
+| 3 | Grafton County, NH | 11 | 71,816 | 13.9 |
+| 4 | Gallatin County, MT | 13 | 92,035 | 12.8 |
+| 5 | Warren County, NY | 6 | 52,451 | 12.5 |
+| 6 | Cape May County, NJ | 8 | 76,026 | 12.2 |
+| 7 | Larimer County, CO | 36 | 276,735 | 11.9 |
+| 8 | Multnomah County, OR | 78 | 636,020 | 11.4 |
+| 9 | Benton County, OR | 8 | 71,683 | 11.4 |
+| 10 | Deschutes County, OR | 30 | 161,952 | 11.0 |
+| 11 | Hampshire County, MA | 14 | 116,741 | 10.9 |
+| 12 | Chelan County, WA | 9 | 59,757 | 10.7 |
+| 13 | Denver County, CO | 69 | 568,542 | 10.7 |
+| 14 | Chittenden County, VT | 14 | 127,125 | 10.5 |
+| 15 | Flathead County, MT | 8 | 83,338 | 10.5 |
 
 Full top 50: `data/processed/us_top50_county_brewery_density_table.png`.
+
+**How many breweries are actually there?** The map above is a per-capita model
+estimate and deliberately cannot answer that. `docs/images/brewery_count_map.png` is its
+companion: raw Open Brewery DB counts per county as proportional symbols, with
+no model, no population denominator and no capture-rate correction. The two
+disagree in an informative way — metros dominate the count map and largely
+vanish on the rate map — and that difference is the finding, not an artifact.
+
+![Raw brewery count per US county, proportional symbols](docs/images/brewery_count_map.png)
 
 ## Setup
 
@@ -56,7 +72,7 @@ Add that `export` to your shell profile, or prefix every `uv` command with it.
 Census API key goes in `.env` (gitignored) as `CENSUS_API_KEY=...`; get one at
 https://api.census.gov/data/key_signup.html.
 
-Run tests: `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/` (80 tests,
+Run tests: `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/` (98 tests,
 statistical-correctness regression coverage).
 
 ## Layout
@@ -116,23 +132,52 @@ recommended primary level; county is secondary; place is population-floored
 at 50,000 adults 21+. Top-50 tables exist for all three.
 
 **Models.** The headline county ranking (`fit_combined_spatial_covariate_model.py`)
-is a negative-binomial GLM on 7 covariates (income, age, college share,
-tourism, population growth, unemployment, rent) plus state fixed effects
-plus a **BYM2 spatial random effect**: each county's estimate is smoothed
-toward its geographic neighbors via a structured (ICAR) + unstructured
-component, properly weighted (Riebler et al. 2016). Adopted after beating
-three simpler alternatives on held-out log-likelihood: empirical Bayes
+is a negative-binomial GLM on 8 covariates (income, age, college share,
+tourism, **population density**, population growth, unemployment, rent) plus
+state fixed effects plus a **BYM2 spatial random effect**: each county's
+estimate is smoothed toward its geographic neighbors via a structured (ICAR) +
+unstructured component, properly weighted (Riebler et al. 2016). Adopted after
+beating three simpler alternatives on held-out log-likelihood: empirical Bayes
 shrinkage (`fit_national_models.py`, `src/breweries/shrinkage.py`; still
 the model behind CBSA/place, which have no spatial-neighbor equivalent, and
 still shipped as a toggleable comparison at the county level), the same
 covariates with no spatial term, and a spatial-only model. See Key Findings
 and `docs/methods_memo.md` Section 15 for the full validation.
 
+Held-out log-likelihood is now reported **stratified by county size**, not
+only pooled. Pooled, the comparison is dominated by the ~75% of counties below
+the map's own 50k population floor, where a spatial prior buys accuracy
+cheaply; that average selected a specification that was measurably biased on
+the counties the map actually colours. A posterior-predictive calibration
+check (`us_county_combined_calibration.csv`) reports what fraction of counties
+fall outside the model's own 95% interval, by size and by direction.
+
 **Coverage calibration.** OBDB undercounts true breweries by an amount
-that varies mostly by *state*: measured against the 23 calibrated
-registries (`src/breweries/capture_rate_model.py`); other states get a
-pooled fallback with a deliberately wide uncertainty interval. Headline
-outputs are **not** capture-rate-corrected by default.
+that varies mostly by *state* — measured capture rate runs from Virginia's
+46% to Oregon's 93%, i.e. a **7–54% undercount** depending on the state —
+measured against the 23 calibrated registries
+(`src/breweries/capture_rate_model.py`); other states get a pooled fallback
+with a deliberately wide uncertainty interval. Headline outputs are **not**
+capture-rate-corrected by default. Note this means the state fixed effect is
+partly absorbing OBDB's coverage gap rather than real brewery scarcity; the
+`CAPTURE_RATE_OFFSET` variant in the model script de-confounds the two and is
+reported in the holdout table.
+
+**Record hygiene.** OBDB's `brewery_type` field is crowdsourced and often
+wrong, so a type filter alone is not enough. `apply_obdb_hygiene.py` (see
+`src/breweries/obdb_hygiene.py`) additionally removes reviewed non-breweries
+that are typed as breweries (wineries, cideries, meaderies, distilleries),
+collapses duplicate entries for a single physical location, corrects county
+misassignments caused by street-name collisions in geocoding, and reports the
+~3% of records that carry no county assignment instead of dropping them
+silently. Every action is itemized in `data/processed/obdb_hygiene_report.csv`.
+
+**Mapping.** Choropleths use Census **cartographic boundary** geometry
+(shoreline-clipped), never TIGER/Line: TIGER carries legal boundaries that
+extend counties across open water, which fills the Great Lakes and Chesapeake
+Bay with county colour (248 counties are >25% water by TIGER area). Spatial
+joins and the contiguity graph still use TIGER, which is the authoritative
+boundary. See `scripts/build_choropleth.py` for the full list of map fixes.
 
 Full argument, every row-count table, and development history:
 `docs/methods_memo.md`.

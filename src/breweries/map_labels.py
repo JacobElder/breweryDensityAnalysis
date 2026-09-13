@@ -82,10 +82,21 @@ def place_labels(
         for dx, dy, ha, va in _OFFSET_CANDIDATES:
             marker = ax.plot(cand.x, cand.y, marker="o", markersize=marker_size,
                               color="black", zorder=5, linestyle="none")[0]
+            # Leader line from the dot to the text. The offsets here are small
+            # (<=18pt), but a long label's TEXT still extends far from its own
+            # dot -- "Hampshire County, MA" is ~150px wide at this size, which
+            # in a dense region like New England spans several counties. With
+            # nothing connecting text to dot, readers attributed labels to the
+            # wrong county (reported for Hampshire County MA, Whatcom County WA
+            # and the Burlington/Grafton pair). The connector is drawn under
+            # the text and dot so it never obscures either.
             text = ax.annotate(
                 cand.text, (cand.x, cand.y), xytext=(dx, dy), textcoords="offset points",
                 fontsize=fontsize, fontweight="bold", color="black", zorder=6,
                 ha=ha, va=va,
+                arrowprops={"arrowstyle": "-", "linewidth": 0.5, "color": "#444444",
+                             "shrinkA": 0.0, "shrinkB": float(marker_size),
+                             "connectionstyle": "arc3,rad=0.0"},
             )
             fig.canvas.draw()
             bbox = text.get_window_extent(renderer=renderer)

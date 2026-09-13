@@ -17,8 +17,22 @@ FIPS_TO_ABBR = {v: k for k, v in STATE_FIPS_ALL.items()}
 
 
 def main() -> None:
-    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded.parquet")
-    geocoded["county_geoid"] = geocoded["county_geoid"].str.zfill(5)
+    # The HYGIENE-PASS output, not the raw geocode: non-brewery records that
+    # passed OBDB's own type filter (wineries, cideries, meaderies typed
+    # "micro"), duplicate entries for one physical location, and county
+    # misassignments from street-name collisions are all resolved there.
+    # See scripts/apply_obdb_hygiene.py and src/breweries/obdb_hygiene.py.
+    geocoded = pd.read_parquet("data/processed/obdb_us_geocoded_clean.parquet")
+    geocoded["county_geoid"] = geocoded["county_geoid"].astype("string").str.zfill(5)
+
+    # Ungeocoded records are excluded (they have no county to be counted in),
+    # but say so out loud -- this was previously a bare dropna() that removed
+    # 3.1% of records without ever surfacing the number.
+    n_ungeocoded = int(geocoded["county_geoid"].isna().sum())
+    if n_ungeocoded:
+        print(f"NOTE: {n_ungeocoded} records ({n_ungeocoded / len(geocoded):.1%}) have no county "
+              "assignment and are excluded from county counts; they are itemized in "
+              "data/processed/obdb_hygiene_report.csv")
     counts = geocoded.dropna(subset=["county_geoid"]).groupby("county_geoid").size().rename("obdb_count")
 
     acs_county = acs.load_national("county")

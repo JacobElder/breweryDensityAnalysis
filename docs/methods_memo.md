@@ -993,13 +993,25 @@ BYM2 spatial term isn't defined at those levels).
 ### 15.1 Model specification
 
 Negative-binomial GLM: `count_i ~ NegBinomial(mu_i, alpha)`,
-`mu_i = exposure_i * exp(X_i * beta + spatial_i)`, where `X_i` is the same
-7-covariate design (log median household income, median age, college
-enrollment share, tourism establishments per 10k, 5-year population growth,
-unemployment rate, median gross rent) plus 49 state dummies used in Model B
-(Section 9), and `spatial_i` is a **BYM2** (Besag-York-Mollié, Riebler et
+`mu_i = exposure_i * exp(X_i * beta + spatial_i)`, where `X_i` is an
+8-covariate design (log median household income, median age, college
+enrollment share, tourism establishments per 10k, **log population density per
+sq mi**, 5-year population growth, unemployment rate, median gross rent) plus
+49 state dummies, and `spatial_i` is a **BYM2** (Besag-York-Mollié, Riebler et
 al. 2016 parameterization) random effect combining a structured and an
 unstructured component:
+
+`log_density` was added after publication and is not part of Model B's
+original 7-covariate design (Section 9). Its absence was the model's largest
+defect: with no urbanicity term, the BYM2 spatial effect was the only
+component able to express urban/rural variation, and smoothing it was that
+term's entire job. See Section 18.3 for the measured bias this produced and
+how it was found.
+
+Optionally, `exposure_i` also carries the state capture rate
+(`CAPTURE_RATE_OFFSET`), which de-confounds the state fixed effect from OBDB's
+state-level coverage gap. Off by default — it changes the reported quantity
+from an observed rate to a true rate. See Section 18.3.
 
 ```
 spatial_i = sigma * (sqrt(rho/scale) * phi_i + sqrt(1-rho) * theta_i)
@@ -1325,3 +1337,396 @@ the flat national mean. Real bugs caught across all seven rounds:
   practice in Bayesian small-area disease-mapping for exactly this reason,
   though the winsorization fix turned out to be the one that actually
   mattered most for this specific case.
+
+## 18. Post-publication corrections (the r/dataisbeautiful round)
+
+The population-floored county choropleth was posted publicly and drew
+substantial criticism. Most of it was correct. This section records what was
+actually wrong, separated from what was pile-on, and what changed in response.
+The distinction matters because the two most-repeated complaints ("the data is
+bogus", "low-effort slop") were wrong about provenance while pointing at real
+defects, and one widely-upvoted complaint was simply mistaken.
+
+### 18.1 The cartography was broken, and it was the reason nobody got further
+
+County polygons came from TIGER/Line, which carries **legal** boundaries.
+Those extend across open water wherever a county's jurisdiction does, so the
+map filled the Great Lakes, Chesapeake Bay, Long Island Sound and Massachusetts
+Bay with solid county colour. Measured against the TIGER attribute table:
+
+| | counties |
+|---|---|
+| >25% water by area | 248 |
+| >50% water by area | 107 |
+| Keweenaw County, MI | 91% water |
+| Leelanau County, MI | 86% water |
+
+Switching to Census **cartographic boundary** files (`cb_2024_us_county_500k`,
+shoreline-clipped) takes Keweenaw from 15,453 km² of painted area to 1,519 km².
+
+This was not merely cosmetic. The Great Lakes counties with the largest water
+areas are also small-population counties carrying the *noisiest* rate
+estimates, so the bug painted tens of thousands of km² of open lake in the
+colour of the least reliable numbers in the dataset. Keweenaw's 47.2/100k
+comes from one brewery and 1,809 adults 21+.
+
+Cartographic boundary files are now used for display only
+(`tiger.load_cb_counties`). Every spatial join and the Queen contiguity graph
+still use TIGER, which is the authoritative boundary — a brewery in a county's
+water area still belongs to that county. `fetch_counties`'s glob was tightened
+at the same time, because `us_county_*.parquet` matches the new
+`us_county_cb_*.parquet` cache **and sorts after it**, which would have made
+`load_counties()` silently start returning clipped geometry to every consumer.
+
+### 18.2 The population floor: right problem, wrong instrument
+
+The floor is not paranoia. 1,915 of 3,222 counties (59%) have zero observed
+breweries, and unfloored the model paints 284 of them in the "3-6 per 100k" bin
+or darker, 14 of them in the top bin — Jackson County CO (0 breweries, 1,121
+adults 21+) lands at 50.5/100k, third-highest in the country. Commenters
+arguing the floor should simply be removed were wrong.
+
+But the floor as implemented had two separate problems:
+
+1. **Coverage.** It greyed 2,405 of 3,222 counties — **74.6% of the map** — to
+   suppress noise affecting 15.9% of breweries and 15.5% of the adult
+   population. (A widely-upvoted comment said "only about a quarter of US
+   counties are above 50,000", which is correct and is the same fact stated
+   from the other side.)
+
+2. **Rendering.** The "insufficient population" grey `#bfbfbf` has relative
+   luminance 0.521; the "3-6 per 100k" bin has luminance 0.516. They were
+   optically indistinguishable. Three-quarters of the map was painted at the
+   darkness of a mid-scale value, which is why readers reported not being able
+   to tell what was being measured.
+
+The deeper issue is that population is only a *proxy* for "how much do we know
+about this county", and the model already computes the real answer. So the
+headline map now encodes the posterior interval width continuously
+(`build_choropleth.py::reliability`): colour fades toward the page as the 95%
+interval widens. Data-poor counties wash out gradually instead of being
+replaced by a flat grey, and large counties with thin coverage — which the
+floor let through at full strength — now fade too. The floored version is
+retained as a comparison, with the grey replaced by white-with-hatching so it
+sits off the lightness ramp entirely.
+
+Two legend bugs were fixed alongside: bin edges were computed from the full
+data column rather than the values actually drawn, so the floored map's top bin
+read "15-77" when the highest visible county was Tompkins NY at 16.1 (and
+exactly one county occupied that bin); and the "No data" swatch was drawn
+despite applying to zero counties in frame, adding a second grey at luminance
+0.807 between the two lightest data bins.
+
+### 18.3 The model was biased downward on exactly the counties readers know
+
+Several comments made the same specific, falsifiable claim: St. Louis city
+shown in the 3-6/100k band when 26 OBDB entries over 225k adults implies
+10-15; Cincinnati (Hamilton County OH) shown far below its 60+ real breweries.
+Checked directly, they were right, and the bias was systematic:
+
+- Among the 173 counties with ≥10 observed breweries, the fitted rate came in
+  **below** the raw rate 69% of the time, median ratio 0.87.
+- Broken out by quintile of raw rate, the top quintile was cut by a median of
+  **32%**.
+- Nine of 107 well-observed counties had their observed count fall outside
+  their own model 95% interval **on the high side** (nominal: ~2.5%), always
+  in the same direction.
+
+| county | observed | model-implied expectation | P(obs or more) |
+|---|---|---|---|
+| Fulton (Atlanta) GA | 28 | 12.0 | <0.001 |
+| Charleston SC | 24 | 12.9 | 0.004 |
+| Buncombe (Asheville) NC | 33 | 19.7 | 0.004 |
+| St. Louis city MO | 20 | 11.1 | 0.010 |
+| Deschutes (Bend) OR | 30 | 19.3 | 0.014 |
+
+**Cause: there was no urbanicity term anywhere in the linear predictor.** The
+covariate list ran income, age, college share, tourism, population growth,
+unemployment, rent — no density. `density_per_sqmi` was computed upstream in
+`build_national_county_dataset.py` and simply never wired in. With no density
+covariate, the only component able to express "cities have more breweries per
+adult than the farmland around them" was the BYM2 spatial effect, whose entire
+purpose is to *smooth* variation toward neighbours. The model was asked to
+represent a sharp urban/rural discontinuity using the one term built to erase
+it, and it did what it was told: Buncombe is ringed by rural Appalachian
+counties, St. Louis city by St. Louis County (1.35/100k), Deschutes by empty
+eastern Oregon.
+
+`log_density` is now a covariate (§15.1 spec updated accordingly).
+
+**But the density covariate did not fix the bias, and the follow-up hypothesis
+was wrong.** Refitting with `log_density` in, the diagnostics barely moved:
+
+| | published | + density |
+|---|---|---|
+| fitted below raw rate (n≈170, ≥10 breweries) | 69.4% | 67.8% |
+| median model/raw ratio | 0.869 | 0.885 |
+| top raw-rate quintile, median cut | 31.6% | 30.2% |
+| Fulton GA, observed 28, expected | 12.0 | 12.3 |
+| well-observed counties above their own 95% CI | 9/107 | 8/103 |
+
+What it *did* do is move large metros up the ranking — Multnomah County OR
+(Portland) and Denver County CO both enter the county top 20 for the first
+time — and improve held-out log-likelihood in every size stratum. So it was a
+real omission worth fixing, just not the cause of the downward pull.
+
+The obvious next suspect was the spatial prior itself: posterior `rho` = 0.971,
+i.e. the spatial effect is almost entirely the structured ICAR component, and
+Fulton County is an independently confirmed Gi* **cold spot** (z = −3.01), so
+metro Atlanta is surrounded by low-rate neighbours the prior could be pulling
+it toward. `scripts/test_spatial_term_urban_bias.py` tests this directly by
+fitting the identical covariate + state-FE design with and without the BYM2
+term on the same seeded split.
+
+**The result refutes the hypothesis.** Dropping the spatial term makes
+well-observed counties fit *worse*, not better, on every measure:
+
+| | + BYM2 | no spatial term |
+|---|---|---|
+| held-out log-lik, mapped (≥50k adults) | **−2.3198** | −2.3715 |
+| held-out log-lik, well-observed (≥10 breweries) | **−4.1494** | −4.2987 |
+| top raw-rate quintile, median model/raw ratio | **0.648** | 0.494 |
+| mean abs log error, well-observed | **0.2747** | 0.4475 |
+
+Without the spatial term the model shrinks high-rate counties *harder*, not
+less. The BYM2 effect is the component letting a county like Boulder or
+Deschutes sit above what its covariates and state baseline alone would
+predict; removing it forces all of that deviation back onto the state
+intercept, which is a much blunter instrument. (These are train-fold fits, so
+absolute levels differ from the production fit — Fulton is in the test fold —
+but the between-model comparison on the identical split is the point.)
+
+**So what remains is not a bug.** The gap between a county's raw rate and its
+fitted rate is partial pooling working as designed: a hierarchical model
+deliberately reports less than the raw rate for counties that sit far above
+what their covariates, state, and neighbours predict, because some of that
+excess is expected to be noise. Fulton County genuinely is such a county —
+28 observed against ~12 predicted from dense-urban covariates plus Georgia's
+state baseline.
+
+That makes the reader complaints in §18.3 a **presentation** problem rather
+than an estimation one. "You have St Louis in the 3-6 band, that should be
+10-15" is arithmetic on the raw count, and it is correct arithmetic; the map
+was showing a partially-pooled estimate while being titled "Brewery Density",
+which invites exactly that comparison and loses it. The fix is not to
+un-shrink the model. It is to stop titling a partially-pooled posterior as if
+it were a count, and to ship the raw-rate map alongside it
+(`build_map_comparison.py` already renders raw vs. corrected side by side) so
+the difference between "what was observed" and "what the model believes" is
+visible rather than implied.
+
+Recorded here because the first hypothesis was stated confidently and was
+wrong, and the test that killed it is cheap to re-run.
+
+**Why model selection didn't catch it.** Held-out log-likelihood was averaged
+over all 3,109 CONUS counties, ~75% of which sit below the map's own
+population floor and are never coloured. A spatial prior buys accuracy very
+cheaply on counties carrying almost no data, so the pooled average was
+dominated by counties no reader looks at — and it selected the specification
+that was biased where readers do look. The comparison is now reported
+**stratified by county size** (`stratified_holdout_loglik`), alongside a
+posterior-predictive calibration check
+(`us_county_combined_calibration.csv`) that reports what fraction of counties
+fall outside the model's own 95% interval by stratum and direction.
+
+**The state fixed effect is confounded with OBDB coverage.** Measured capture
+rate runs from Virginia's 46% to Oregon's 93%. Without a capture-rate offset
+the state FE cannot separate "this state has few breweries" from "OBDB covers
+this state badly"; it fits the product. Georgia is the clean illustration:
+capture rate 0.476, and its state FE moves +0.72 when the same model is fit to
+corrected counts — approximately log(1/0.476), i.e. essentially all of that
+state effect was coverage, not beer. `fit_nb_model` now accepts a
+`log_capture_rate` offset that de-confounds the two. It is **off** by default,
+because turning it on changes the published quantity from an OBDB-observed
+rate to a true-brewery rate, which is an editorial decision rather than a bug
+fix; the variant is fit and reported in the holdout table either way.
+
+### 18.4 Data quality: real holes, and one complaint that was wrong
+
+`brewery_type` filtering removes correctly-typed cideries and meaderies, but
+OBDB is crowdsourced and the type field is frequently wrong. 45 records that
+pass the type filter name a competing beverage category in their own name.
+A reader flagged Leelanau County, MI — Michigan wine country — ranking near the
+top on five records; two of them ("Green Bird Cellars and Organic Farms", a
+winery typed `micro`; "Sugarfoot Saloon", a bar) are not breweries. At 18,638
+adults 21+ those two records moved the county's raw rate by 10.7 per 100k.
+Leelanau now counts 3.
+
+Name matching alone cannot decide this — "Sapwood Cellars", "Cellar West
+Artisan Ales", "Raney Cellars" and "Monk's Cellar" are all real breweries — so
+`obdb_hygiene` uses the regex only to build a review queue and drops solely
+from an explicit, reasoned table. Unreviewed candidates are reported and kept.
+
+Other findings from the same pass (`data/processed/obdb_hygiene_report.csv`):
+
+| issue | records |
+|---|---|
+| ungeocoded, previously dropped by a silent `dropna()` | 218 (3.2%) |
+| duplicate entries at identical coordinates | 76 |
+| reviewed non-breweries | 24 |
+| county misassigned by street-name collision | 7 |
+
+The misassignment check is worth recording because the obvious version of it
+does not work. Comparing a record's stated `city` to the TIGER place it landed
+in fires on 412 records, nearly all correct geocodes of neighbourhood names
+(Van Nuys → Los Angeles, La Jolla → San Diego). Narrowing to "stated city is an
+incorporated place that lies outside the assigned county" gives 24, which still
+mixes two populations — cleanly separated by distance from the record to its
+own stated city, with a gap in the data from 10.8 km to 26.8 km and nothing in
+between. Below the gap: mailing addresses in unincorporated areas, where the
+geocode is right (Mt. Carmel Brewing is genuinely in Clermont County, 6.0 km
+outside Cincinnati). Above it: street-name collisions, every one of which turns
+out to be the same trap — a town and a *different* county sharing a name.
+Deer Lodge (town in Powell County), Blue Earth (town in Faribault County),
+Sheridan MT (town in Madison County, 687 km from Sheridan County), and the case
+that prompted the check: Quarter Barrel Brewery and Pub, 103 Main St, Hamilton
+OH, geocoded to a Main St in Cincinnati and counted in Hamilton *County*.
+
+Duplicate collapse keys on coordinates, never on name. Same-brand records at
+genuinely different addresses (E.J. Phair in Alamo, Concord and Pittsburg CA)
+are three real premises, and whether satellite taprooms should count as
+separate breweries is the definitional question already addressed in §6 — not
+a data error.
+
+**The one complaint that was wrong:** a reader asserted OBDB listed only a
+"paper brewery" in Lewis County, WA. It lists three real ones — Dick's Brewing,
+Jones Creek Brewing, and McMenamins Olympic Club. The count there was correct.
+
+### 18.5 Labelling
+
+Label offsets are small (≤18pt), but a long label's *text* still extends far
+from its own dot — "Hampshire County, MA" is ~150px wide at 7.5pt, which in
+New England spans several counties. With nothing connecting text to dot,
+readers attributed labels to the wrong county (reported for Hampshire County MA,
+Whatcom County WA, and the Burlington/Grafton pair). `map_labels.place_labels`
+now draws a leader line from each dot to its text.
+
+The city-vs-county inconsistency readers noticed ("Bend, OR" beside "Tompkins
+County, NY") is real but deliberate: the first is a hand-curated face-validity
+anchor, the second is auto-generated from the ranking. Documented rather than
+changed, since the anchors exist precisely to be recognisable place names.
+
+### 18.6 Claims in the post that overstated the work
+
+Two, recorded so they are not repeated:
+
+- The post said OBDB undercounts by "7–38%". The measured range is **7–54%**
+  (capture rate 93% in Oregon to 46% in Virginia). The worst case was
+  understated by a wide margin.
+- The post said the model adjusted for "state alcohol regulations". There is no
+  alcohol-regulation variable in the model. There is a state fixed effect,
+  which absorbs everything that varies at state level — regulation, yes, but
+  also OBDB coverage (see §18.3). Calling it a regulation adjustment claimed a
+  specificity the model does not have.
+
+### 18.7 Three critiques that were missed on the first pass
+
+Found only on a second, systematic pass back through the thread, which is
+itself the lesson: the loudest complaint (the Great Lakes) crowded out
+quieter ones that were just as actionable.
+
+**State boundaries were never drawn.** A reader asked directly to "make the
+borders between states darker". The map had county edges at a uniform
+hairline and nothing else, which is also the mechanism behind a separate
+complaint that the map was "nearly unreadable across much of the midwest":
+with no landmark a reader cannot find a state they know and orient from it.
+`build_choropleth.py` now dissolves counties by STATEFP and draws state
+outlines over the fill.
+
+**There was no absolute-count output anywhere in the project.** Two readers
+independently asked for total brewery counts rather than a per-capita
+adjustment — "gives you little to no idea how many actual breweries there are
+in any given place". They were right, and every county-level rendering the
+project produced was a modelled rate. `build_count_map()` now ships
+`us_brewery_count_map.png`: raw OBDB counts, no model, no denominator, no
+correction.
+
+Proportional SYMBOLS rather than a choropleth, because a count filled across a
+polygon is decoded as density-by-area — San Bernardino County would carry more
+visual weight than Manhattan on area alone. Symbol *area* scales with count,
+which is the encoding readers actually decode correctly.
+
+**The title was wrong, and that was the sharpest critique in the thread.**
+"This isn't 'brewery density', it's 'brewery density relative to county
+population'." Correct, and r/dataisbeautiful's rule 7 requires titles to
+describe the data plainly. The headline is now "Breweries per 100,000 Adults
+21+, by US County", which says what the quantity is instead of naming a
+concept the quantity only approximates.
+
+### 18.8 Known-open items
+
+Recorded rather than quietly dropped:
+
+- **City vs. county labels are mixed** ("Bend, OR" beside "Tompkins County,
+  NY"). Deliberate — the first is a hand-curated face-validity anchor, the
+  second is auto-generated from the ranking — but two readers flagged it and
+  it will draw the same comment again.
+- **County is arguably the wrong areal unit.** State outlines help legibility,
+  but the underlying objection stands. CBSA-level output already exists and is
+  the better headline geography for a general audience.
+- **Salem County NJ shows zero breweries** because OBDB lists none, while at
+  least three exist. Not reachable by any pipeline fix; it is the state-level
+  coverage gap made concrete, and the reason headline outputs carry the
+  capture-rate caveat.
+- **Only some high-rate counties are labelled.** Label placement is
+  collision-aware with a cap (`MAX_AUTO_LABELS`), so a dense cluster silently
+  loses labels to its neighbours. Readable, but not a documented rule from the
+  reader's side.
+
+### 18.9 Latent capture rate: the confounding, and why it is not fitted by MCMC
+
+`CAPTURE_RATE_OFFSET` de-confounds the state fixed effect from OBDB coverage
+by putting log(capture_rate) in the offset. It is left OFF, because an offset
+asserts the capture rate with zero error and it is not known with zero error:
+1,475 counties (29.6% of US adults 21+) sit in states whose rate is a WLS
+extrapolation with a ~3.6x interval, not a measurement.
+
+That understatement is worse than it used to be, because the headline map now
+fades counties by interval width. Too-narrow intervals no longer just shrink a
+number in a table — they make a county look MORE confidently drawn, and the
+least-certain capture rates are exactly the uncalibrated states. A fixed offset
+would render the worst-covered states as the most confident ones.
+
+`src/breweries/latent_capture_rate.py` treats the capture rate as latent with
+its calibration prior instead. Measured effect on interval width (log scale):
+
+| capture source | counties | observed | fixed offset | latent |
+|---|---|---|---|---|
+| calibrated | 1,747 | 1.471 | 1.471 | 1.506 |
+| pooled extrapolation | 1,362 | 1.557 | 1.557 | **1.941** |
+
+The fixed offset's width is *identical* to the uncorrected width — dividing by
+a constant shifts an interval without widening it. The latent treatment widens
+pooled states by 25% against 2% for calibrated ones.
+
+**The data cannot identify the capture rate at all.** Writing the model out,
+log(c_s) and the state dummy's coefficient are additively confounded — the
+likelihood only sees their sum, and nothing in a brewery count distinguishes
+"few breweries here" from "few breweries *listed* here". So the split is driven
+entirely by the external calibration prior, not learned. The sensible
+parameterization is therefore the orthogonal one: `state_total` (= state FE +
+log c) is what the data identify, which is exactly the model already fitted,
+and true-scale rates follow by dividing the existing posterior by DRAWS from
+the capture prior.
+
+That is a strong claim, so `scripts/fit_latent_capture_rate_model.py` tests it
+rather than asserting it, via a direct joint fit with log_capture as an
+explicit parameter:
+
+- **Test 1, identification.** If the counts cannot move the capture rate, its
+  posterior must equal its prior. Median mean-shift **0.013 prior sds**
+  (max 0.063 across all 49 states); posterior/prior sd ratio **0.999**. The
+  posterior is the prior.
+- **Test 2, equivalence.** Convolution vs. joint fit on the same observed
+  rates: median |relative difference| **0.0024** (point estimate), 0.0056 and
+  0.0069 on the interval bounds; correlations >= 0.9999.
+
+The validation fit deliberately omits the BYM2 term. The confounding under
+test is a property of the state-level linear predictor, and a per-county
+spatial random effect carries no state-level location, so dropping it tests the
+same question while removing 6,218 of ~6,280 stored parameters per draw — which
+is what makes the test runnable on a 16GB machine at all.
+
+Consequence for the headline: the observed-scale posterior is untouched, so the
+map does not move. Only the true-scale quantity gains the uncertainty it should
+always have carried.

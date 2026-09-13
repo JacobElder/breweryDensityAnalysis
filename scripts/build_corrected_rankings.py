@@ -82,7 +82,13 @@ CMAP = LinearSegmentedColormap.from_list(
     ["#fff5e6", "#ffe0a3", "#ffc266", "#f2932e", "#c96a15", "#8a4008", "#4d2004"],
 )
 NO_DATA_COLOR = "#e8e8e8"
-INSUFFICIENT_POP_COLOR = "#bfbfbf"
+# Below-floor counties are drawn as hatched white, NOT grey: the old #bfbfbf
+# had relative luminance 0.521 against the "3-6 per 100k" bin's 0.516, making
+# the single most common colour on the map optically identical to a mid-scale
+# value. See methods memo Section 18.2.
+BELOW_FLOOR_FACE = "#ffffff"
+BELOW_FLOOR_HATCH = "///"
+BELOW_FLOOR_EDGE = "#b0b0b0"
 
 pd.set_option("display.width", 160)
 pd.set_option("display.max_colwidth", 30)
@@ -199,7 +205,8 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
                   edgecolor="#888888", linewidth=0.2, missing_kwds={"color": NO_DATA_COLOR})
         below = sub[sub["_below_floor"]]
         if len(below):
-            below.plot(ax=ax, color=INSUFFICIENT_POP_COLOR, edgecolor="#888888", linewidth=0.2)
+            below.plot(ax=ax, color=BELOW_FLOOR_FACE, edgecolor=BELOW_FLOOR_EDGE,
+                        linewidth=0.2, hatch=BELOW_FLOOR_HATCH)
         ax.set_axis_off()
 
     fig = plt.figure(figsize=(16, 10), facecolor="white")
@@ -227,7 +234,8 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
     legend_elems = [Patch(facecolor=CMAP(norm((bins[i] + bins[i + 1]) / 2)), edgecolor="#888888",
                            label=labels[i]) for i in range(len(labels))]
     if floor is not None:
-        legend_elems.append(Patch(facecolor=INSUFFICIENT_POP_COLOR, edgecolor="#888888",
+        legend_elems.append(Patch(facecolor=BELOW_FLOOR_FACE, edgecolor=BELOW_FLOOR_EDGE,
+                                   hatch=BELOW_FLOOR_HATCH,
                                    label=f"< {floor:,} adults 21+"))
     legend_elems.append(Patch(facecolor=NO_DATA_COLOR, edgecolor="#888888", label="No data"))
     legend = ax.legend(handles=legend_elems, loc="lower left", bbox_to_anchor=(0.33, -0.02),
@@ -343,7 +351,12 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("Building corrected choropleth maps")
     print("=" * 70)
-    counties = tiger.load_counties()[["STATEFP", "GEOID", "NAMELSAD", "geometry"]]
+    # CARTOGRAPHIC BOUNDARY geometry (shoreline-clipped), not TIGER/Line:
+    # TIGER carries legal boundaries that extend counties across open water,
+    # which fills the Great Lakes and Chesapeake Bay with county colour. See
+    # breweries.sources.tiger and methods memo Section 18.1. Display only --
+    # spatial joins and contiguity graphs still use tiger.load_counties().
+    counties = tiger.load_cb_counties()[["STATEFP", "GEOID", "NAMELSAD", "geometry"]]
     map_df = df_corrected[["county_geoid", "eb_posterior_rate_per_100k_corrected",
                             "adults_21plus", "state_abbr"]].copy()
     map_df["county_geoid"] = map_df["county_geoid"].str.zfill(5)

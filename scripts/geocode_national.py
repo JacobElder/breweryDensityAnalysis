@@ -96,9 +96,24 @@ def main() -> None:
     national.to_parquet("data/processed/obdb_us_geocoded.parquet", index=False)
 
     match_rate = national["county_geoid"].notna().mean()
+    n_unmatched = len(national) - int(national["county_geoid"].notna().sum())
     print(f"\nTotal: {len(national)} records, {national['county_geoid'].notna().sum()} matched "
           f"({match_rate:.2%})")
+    if n_unmatched:
+        print(f"WARNING: {n_unmatched} records have no county assignment and will be excluded from "
+              "every county-level count. By state: "
+              f"{national[national['county_geoid'].isna()]['state_abbr'].value_counts().head(8).to_dict()}")
     print("Wrote data/processed/obdb_us_geocoded.parquet")
+
+    # The analysis consumes the HYGIENE-PASS output, never this file directly:
+    # OBDB's brewery_type filter alone leaves wineries/cideries/meaderies,
+    # duplicate entries for one location, and street-collision county
+    # misassignments in the counts. Chained here so a fresh geocode can't
+    # leave a stale clean file behind it.
+    print("\nRunning record hygiene pass...")
+    from apply_obdb_hygiene import main as hygiene_main  # noqa: PLC0415  (scripts/ is on sys.path when run as a script)
+
+    hygiene_main()
 
 
 if __name__ == "__main__":
