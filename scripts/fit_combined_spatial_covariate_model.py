@@ -613,6 +613,45 @@ def posterior_alpha_mu(
 # Held-out log-likelihood: shared MC evaluator + per-model wrappers
 # ---------------------------------------------------------------------------
 
+def nb_holdout_loglik_per_county(
+    y: np.ndarray, alpha_samples: np.ndarray, mu_samples: np.ndarray, test_idx: np.ndarray,
+) -> np.ndarray:
+    """Per-county held-out log predictive density, i.e. the terms that
+    `nb_holdout_loglik_mc` averages.
+
+    Kept separately because the AVERAGE alone cannot be given an uncertainty
+    interval, and every held-out comparison in this project had been reported
+    as a bare point difference to four decimal places -- on strata as small as
+    n=28. A difference of 0.15 nats/county on 28 counties may or may not be
+    signal, and there was no way to tell from what was reported.
+    """
+    y_test = y[test_idx]
+    mu_test = mu_samples[:, test_idx]
+    alpha = alpha_samples[:, None]
+    p = alpha / (alpha + mu_test)
+    logpmf = stats.nbinom.logpmf(y_test[None, :], n=alpha, p=p)
+    S = logpmf.shape[0]
+    return logsumexp(logpmf, axis=0) - np.log(S)
+
+
+def paired_bootstrap_ci(
+    a: np.ndarray, b: np.ndarray, n_boot: int = 10_000, seed: int = SEED,
+) -> tuple[float, float, float, float]:
+    """Paired bootstrap over counties for mean(a) - mean(b).
+
+    PAIRED because both models are scored on the identical held-out counties,
+    so the county-to-county variation in difficulty is common to both and
+    should not be counted as uncertainty about the difference. Returns
+    (mean difference, 2.5th pct, 97.5th pct, fraction of resamples favouring a).
+    """
+    d = a - b
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(d), size=(n_boot, len(d)))
+    boot = d[idx].mean(axis=1)
+    return (float(d.mean()), float(np.percentile(boot, 2.5)),
+            float(np.percentile(boot, 97.5)), float((boot > 0).mean()))
+
+
 def nb_holdout_loglik_mc(y: np.ndarray, alpha_samples: np.ndarray, mu_samples: np.ndarray, test_idx: np.ndarray) -> float:
     """Monte Carlo posterior-predictive mean held-out log-lik (same method as
     fit_spatial_car_model.py::spatial_holdout_loglik): average density (not
@@ -820,6 +859,7 @@ def run_holdout_validation(
         {"model": "CAR-only (pure ICAR)", "held_out_loglik_per_county": ll_car},
     ]
     calibrations = []
+    percounty_ll = {}
     for name, kwargs, label in variants:
         idata = fit_nb_model(
             y, log_exposure, W, scale, train_idx, spatial_type="bym2",
@@ -828,6 +868,7 @@ def run_holdout_validation(
         alpha_v, mu_v = posterior_alpha_mu(idata, X=kwargs["X"], log_exposure=log_exposure,
                                            scale=scale, spatial_type="bym2",
                                            log_capture_rate=kwargs.get("log_capture_rate"))
+        percounty_ll[name] = nb_holdout_loglik_per_county(y, alpha_v, mu_v, test_idx)
         ll = nb_holdout_loglik_mc(y, alpha_v, mu_v, test_idx)
         row = {"model": name, "held_out_loglik_per_county": ll}
         row.update(stratified_holdout_loglik(df, y, alpha_v, mu_v, test_idx))
@@ -849,6 +890,20 @@ def run_holdout_validation(
     print("\nSame fits, held-out log-lik BROKEN OUT BY COUNTY SIZE "
           "(the map only colours the '>=50k adults' stratum):")
     print(results[["model"] + strat_cols].dropna().round(4).to_string(index=False))
+
+    # Paired bootstrap against the published spec. Without this the table is a
+    # set of point differences at four decimal places with no way to tell which
+    # orderings are real -- and the spec search below was guided by exactly
+    # these numbers.
+    base = "Combined as published (no density covariate)"
+    print("\nPaired bootstrap vs. the published spec (positive favours the row):")
+    for name, ll_vec in percounty_ll.items():
+        if name == base:
+            continue
+        diff, lo, hi, _ = paired_bootstrap_ci(ll_vec, percounty_ll[base])
+        verdict = "excludes 0" if (lo > 0 or hi < 0) else "INCLUDES 0 -- not distinguishable"
+        print(f"  {name:45s} diff={diff:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]  {verdict}")
+    print(f"  (n = {len(test_idx)} held-out counties)")
 
     calib_all = pd.concat(calibrations, ignore_index=True)
     calib_all.to_csv(OUT_CALIBRATION, index=False)

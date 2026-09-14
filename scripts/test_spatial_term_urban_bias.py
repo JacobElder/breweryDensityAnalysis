@@ -41,6 +41,8 @@ import pandas as pd
 from fit_combined_spatial_covariate_model import (
     CHAINS,
     DRAWS,
+    nb_holdout_loglik_per_county,
+    paired_bootstrap_ci,
     SEED,
     TARGET_ACCEPT,
     TEST_FRACTION,
@@ -120,7 +122,7 @@ def main() -> None:
     train_idx = np.sort(perm[n_test:])
     print(f"Train {len(train_idx)} / Test {len(test_idx)} (same seeded split as the main script)")
 
-    rows, bias_rows = [], []
+    rows, bias_rows, percounty = [], [], {}
     for spatial_type, label in [("bym2", "covariates + density + state FE + BYM2"),
                                  ("none", "covariates + density + state FE, NO spatial term")]:
         idata = fit_nb_model(
@@ -128,9 +130,13 @@ def main() -> None:
             X=X, prior_mu=prior_mu, prior_sigma=prior_sigma, is_state_col=is_state_col,
             spatial_type=spatial_type, draws=DRAWS, tune=TUNE, chains=CHAINS,
             target_accept=TARGET_ACCEPT, label=label,
+            # Sequential chains: peak RSS scales with parallel workers, and
+            # this machine OOM-killed six runs before that was measured.
+            cores=1,
         )
         alpha_s, mu_s = posterior_alpha_mu(idata, X=X, log_exposure=log_exposure,
                                             scale=scale, spatial_type=spatial_type)
+        percounty[label] = nb_holdout_loglik_per_county(y, alpha_s, mu_s, test_idx)
         row = {"model": label,
                "held_out_loglik_per_county": nb_holdout_loglik_mc(y, alpha_s, mu_s, test_idx)}
         row.update(stratified_holdout_loglik(merged, y, alpha_s, mu_s, test_idx))
@@ -144,6 +150,23 @@ def main() -> None:
     bias = pd.DataFrame(bias_rows)
     print("\nUrban downward-bias diagnostics (Fulton County GA observed 28):")
     print(bias.to_string(index=False))
+
+    # Paired bootstrap on the difference, overall and on the stratum that the
+    # whole question is about. A point difference quoted to four decimals on
+    # n=28 counties says nothing on its own about whether the ordering is real.
+    labels = list(percounty)
+    a, b = percounty[labels[0]], percounty[labels[1]]
+    well = (merged["obdb_count"].to_numpy() >= 10)[test_idx]
+    print("\nPaired bootstrap, mean held-out log-lik difference "
+          f"({labels[0]} MINUS {labels[1]}); positive favours BYM2:")
+    for name, sel in [("all held-out counties", np.ones(len(a), bool)),
+                      ("well-observed (>=10 breweries)", well)]:
+        if sel.sum() < 2:
+            continue
+        diff, lo, hi, pfav = paired_bootstrap_ci(a[sel], b[sel])
+        verdict = "excludes 0" if (lo > 0 or hi < 0) else "INCLUDES 0 -- not distinguishable"
+        print(f"  {name:32s} n={int(sel.sum()):4d}  diff={diff:+.4f}  "
+              f"95% CI [{lo:+.4f}, {hi:+.4f}]  {verdict}")
 
     merged_out = results.merge(bias, on="model")
     merged_out.to_csv(OUT_PATH, index=False)
