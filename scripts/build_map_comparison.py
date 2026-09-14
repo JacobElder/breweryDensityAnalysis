@@ -173,7 +173,7 @@ def main() -> None:
     fig.text(0.5, 0.01,
              "Sources: Open Brewery DB, Census ACS 5-year (2020-2024). Panel 1: raw rate, no adjustment. "
              "Panel 2: empirical Bayes Poisson-Gamma shrinkage (partial pooling toward national mean, "
-             "calibrated on 13-state licensee data). Panel 3: additionally applies the capture-rate "
+             "calibrated on 23-state licensee data). Panel 3: additionally applies the capture-rate "
              "correction model (calibrated states use their empirical capture rate; other states use the "
              "pooled WLS-regression rate + density adjustment, capped at 1.0) before the same shrinkage. "
              "Counties under 50,000 adults 21+ are grayed out in all three panels -- shrinkage reduces but "

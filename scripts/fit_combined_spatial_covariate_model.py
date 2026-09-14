@@ -559,7 +559,7 @@ def fit_nb_model(
 
 def posterior_alpha_mu(
     idata: az.InferenceData, *, X: np.ndarray | None, log_exposure: np.ndarray,
-    scale: float, spatial_type: str,
+    scale: float, spatial_type: str, log_capture_rate: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """alpha draws, and expected counts per (draw, county) reconstructed from
     the stored parameters.
@@ -574,6 +574,16 @@ def posterior_alpha_mu(
     """
     post = idata.posterior
     alpha_samples = post["alpha"].values.reshape(-1)
+
+    # MUST mirror fit_nb_model's own offset handling. fit_nb_model rebinds its
+    # LOCAL log_exposure to log_exposure + log_capture_rate before building
+    # log_mu, so a caller that fit with the offset and reconstructs without it
+    # gets mu inflated by exactly 1/capture_rate -- a factor of 2.1 for a
+    # Georgia-like 0.476. That silently corrupted the held-out log-likelihood
+    # of the "+ capture-rate offset" variant, which is the very number the
+    # CAPTURE_RATE_OFFSET decision is supposed to rest on.
+    if log_capture_rate is not None:
+        log_exposure = log_exposure + log_capture_rate
 
     if X is not None:
         beta = post["beta"].values.reshape(-1, post["beta"].shape[-1])
@@ -816,7 +826,8 @@ def run_holdout_validation(
             draws=DRAWS, tune=TUNE, chains=CHAINS, target_accept=TARGET_ACCEPT, label=label, **kwargs,
         )
         alpha_v, mu_v = posterior_alpha_mu(idata, X=kwargs["X"], log_exposure=log_exposure,
-                                           scale=scale, spatial_type="bym2")
+                                           scale=scale, spatial_type="bym2",
+                                           log_capture_rate=kwargs.get("log_capture_rate"))
         ll = nb_holdout_loglik_mc(y, alpha_v, mu_v, test_idx)
         row = {"model": name, "held_out_loglik_per_county": ll}
         row.update(stratified_holdout_loglik(df, y, alpha_v, mu_v, test_idx))
@@ -930,8 +941,9 @@ def main() -> None:
           f"{rho_summ.loc['rho', 'eti89_ub']:.3f}]")
     print(f"Posterior sigma_bym (overall spatial sd): mean={rho_summ.loc['sigma_bym', 'mean']:.3f}")
 
-    alpha_final, mu_final = posterior_alpha_mu(idata_final, X=X, log_exposure=log_exposure,
-                                               scale=scale, spatial_type="bym2")
+    alpha_final, mu_final = posterior_alpha_mu(
+        idata_final, X=X, log_exposure=log_exposure, scale=scale, spatial_type="bym2",
+        log_capture_rate=log_capture_rate if CAPTURE_RATE_OFFSET else None)
     exposure = np.exp(log_exposure)
     # mu_full is always an expected OBSERVED count. Without the offset,
     # mu/adults is the OBDB-observed rate. With the offset, mu already carries

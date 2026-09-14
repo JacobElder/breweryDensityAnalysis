@@ -57,27 +57,41 @@ from fit_combined_spatial_covariate_model import (
 OUT_PATH = "data/processed/us_county_spatial_term_urban_bias.csv"
 
 
-def bias_summary(df: pd.DataFrame, mu_samples: np.ndarray, label: str) -> dict:
+def bias_summary(df: pd.DataFrame, mu_samples: np.ndarray, label: str,
+                 eval_idx: np.ndarray | None = None) -> dict:
     """The same bias diagnostics used in methods memo Section 18.3, recomputed
     from a fit's posterior-median fitted rate.
 
-    CAVEAT: these come from a TRAIN-FOLD fit, so the ~20% of counties in the
-    test fold contribute nothing to the likelihood and their fitted values are
-    pure predictions. Absolute levels here are therefore NOT comparable to the
-    production fit (Fulton County GA is in the test fold: expected count 6.7
-    here versus 12.3 from the all-counties production fit). Only the
-    BETWEEN-MODEL comparison on this identical split is meaningful, which is
-    all this script is for.
+    `eval_idx` MUST be the held-out fold. Scoring these diagnostics over all
+    counties from a train-fold fit invalidates the between-model comparison,
+    because the two models are not equally flexible in sample: BYM2 gives every
+    county its own free `theta_iid` plus a neighbour-informed `phi_icar`, while
+    the no-spatial model has ZERO per-county latent parameters. A model with one
+    free parameter per training observation will fit its own training counties
+    better whatever its spatial prior is doing, so a pooled diagnostic measures
+    flexibility, not the mechanism under test. An earlier version of this script
+    pooled train and test here -- 141 of 169 counties were in-sample -- and its
+    numbers should not be cited.
+
+    Absolute levels still are not comparable to the production fit (this is a
+    train-fold fit; Fulton County GA sits in the test fold). Only the
+    BETWEEN-MODEL comparison on the identical split is meaningful.
     """
     fitted_count = np.percentile(mu_samples, 50, axis=0)
     rate = fitted_count / df["adults_21plus"].to_numpy(dtype=float) * 1e5
     raw_rate = df["obdb_rate_per_100k_21plus"].to_numpy(dtype=float)
 
     mask = (df["obdb_count"].to_numpy() >= 10) & (df["adults_21plus"].to_numpy() >= 50_000)
+    if eval_idx is not None:
+        held_out = np.zeros(len(df), dtype=bool)
+        held_out[eval_idx] = True
+        mask &= held_out
     ratio = rate[mask] / raw_rate[mask]
     q5 = raw_rate[mask] >= np.quantile(raw_rate[mask], 0.8)
 
     well = df["obdb_count"].to_numpy() >= 15
+    if eval_idx is not None:
+        well &= held_out
     return {
         "model": label,
         "n_wellobs": int(mask.sum()),
@@ -121,7 +135,7 @@ def main() -> None:
                "held_out_loglik_per_county": nb_holdout_loglik_mc(y, alpha_s, mu_s, test_idx)}
         row.update(stratified_holdout_loglik(merged, y, alpha_s, mu_s, test_idx))
         rows.append(row)
-        bias_rows.append(bias_summary(merged, mu_s, label))
+        bias_rows.append(bias_summary(merged, mu_s, label, eval_idx=test_idx))
 
     results = pd.DataFrame(rows)
     print("\nHeld-out log-likelihood (higher = better), pooled and by county size:")

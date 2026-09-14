@@ -72,7 +72,7 @@ Add that `export` to your shell profile, or prefix every `uv` command with it.
 Census API key goes in `.env` (gitignored) as `CENSUS_API_KEY=...`; get one at
 https://api.census.gov/data/key_signup.html.
 
-Run tests: `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/` (98 tests,
+Run tests: `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/` (111 tests,
 statistical-correctness regression coverage).
 
 ## Layout
@@ -82,7 +82,7 @@ statistical-correctness regression coverage).
   `capture_recapture.py`, `map_labels.py` (choropleth label placement),
   `spatial_capture_rate.py` (validated, not adopted; see Key Findings)
 - `scripts/`: per-state calibration (`build_{state}_county_dataset.py`,
-  13 fully calibrated + 3 OBDB/OSM/CBP-only), national assembly
+  23 fully calibrated + 3 OBDB/OSM/CBP-only), national assembly
   (`build_national_county_dataset.py`, `build_national_cbsa_place_datasets.py`,
   `geocode_national.py`), the models (`fit_national_models.py`,
   `build_capture_rate_model.py`, `fit_spatial_car_model.py`,
@@ -255,9 +255,9 @@ Full argument, every row-count table, and development history:
 
 - **County-level brewery density is genuinely, strongly spatially clustered: not just independent local outliers.** Global Moran's I = 0.360 (p<0.0001,
   9,999 permutations) rejects spatial randomness; local Getis-Ord Gi\* finds
-  217 hot-spot counties collapsing into five regions: Colorado Front
+  220 hot-spot counties collapsing into five regions: Colorado Front
   Range/Rockies (64), Pacific Northwest (52), New England (50), two Michigan
-  clusters (27); plus 5 cold spots in dense urban cores. Survives the capture-
+  clusters (27); plus 7 cold spots in dense urban cores. Survives the capture-
   rate correction (Moran's I = 0.299): not a coverage artifact (memo Section
   12).
 - **A spatially-aware model built on that finding was adopted as the project's
@@ -360,7 +360,7 @@ Full argument, every row-count table, and development history:
   the top of this file), with a searchable/sortable Table tab alongside the
   map for finding a specific county or metro by name, but but still only at
   county and CBSA level; a place-level toggle would round it out further.
-- **No automated CI**: the 80-test pytest suite (`tests/`) exists and
+- **No automated CI**: the 111-test pytest suite (`tests/`) exists and
   passes but isn't wired into a CI pipeline; a bug could still land on `main`
   without the suite being run.
 

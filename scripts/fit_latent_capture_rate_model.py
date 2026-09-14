@@ -45,6 +45,7 @@ from fit_combined_spatial_covariate_model import (
     build_design_matrix,
     compute_bym2_scale,
     load_conus_graph_with_covariates,
+    posterior_alpha_mu,
 )
 
 CHECKPOINT = "data/processed/_combined_model_idata_checkpoint.nc"
@@ -57,11 +58,24 @@ OUT_COMPARISON = "data/processed/us_county_true_rate_interval_comparison.csv"
 VAL_DRAWS, VAL_TUNE, VAL_CHAINS, VAL_TARGET_ACCEPT = 1500, 1500, 4, 0.95
 
 
-def load_observed_rate_samples(merged: pd.DataFrame) -> np.ndarray:
-    """(n_draws, n_counties) observed-scale rate draws from the production fit."""
+def load_observed_rate_samples(merged: pd.DataFrame, X: np.ndarray, scale: float) -> np.ndarray:
+    """(n_draws, n_counties) observed-scale rate draws from the production fit.
+
+    RECONSTRUCTS mu rather than reading a stored `mu_full` Deterministic. The
+    production script stopped storing that variable (it was a third of the
+    trace, and the fit was being OOM-killed), so reading it here worked only
+    against checkpoints written BEFORE that change and would raise
+    KeyError: 'mu_full' against any new one. Reusing the production script's
+    own reconstruction keeps the two definitions of mu from drifting apart.
+    """
     idata = az.from_netcdf(CHECKPOINT)
-    mu = idata.posterior["mu_full"].values
-    mu = mu.reshape(-1, mu.shape[-1])
+    log_exposure = np.log(merged["adults_21plus"].to_numpy(dtype=float))
+    if "mu_full" in idata.posterior:
+        mu = idata.posterior["mu_full"].values
+        mu = mu.reshape(-1, mu.shape[-1])
+    else:
+        _, mu = posterior_alpha_mu(idata, X=X, log_exposure=log_exposure,
+                                    scale=scale, spatial_type="bym2")
     exposure = merged["adults_21plus"].to_numpy(dtype=float)
     return mu / exposure[None, :] * 100_000
 
@@ -104,10 +118,6 @@ def fit_joint_latent_model(merged: pd.DataFrame, W: np.ndarray, scale: float,
 
     with pm.Model():
         beta_cov = pm.Normal("beta_cov", mu=0.0, sigma=1.0, shape=X_cov.shape[1])
-        # Prior on the identified sum. Matches the original state-FE prior
-        # convolved with the capture prior: sqrt(2.0^2 + sd_log_c^2).
-        state_total = pm.Normal("state_total", mu=mean_log_rate,
-                                 sigma=np.sqrt(2.0 ** 2 + sd_log_c ** 2), shape=n_states)
         log_capture = pm.TruncatedNormal("log_capture", mu=mu_log_c, sigma=sd_log_c,
                                           upper=lcr.LOG_CAPTURE_UPPER, shape=n_states)
 
@@ -122,7 +132,27 @@ def fit_joint_latent_model(merged: pd.DataFrame, W: np.ndarray, scale: float,
         else:
             spatial = 0.0
 
-        log_obs_rate = pm.math.dot(X_cov, beta_cov) + state_total[state_index] + spatial
+        # NAIVE parameterization ON PURPOSE. An earlier version of this
+        # validation put state_total in the likelihood and log_capture only in
+        # a Deterministic -- so log_capture never touched `obs` at all, and its
+        # posterior was forced to equal its prior BY CONSTRUCTION. "Test 1"
+        # then reported that equality as if it were evidence of
+        # non-identifiability, when it was a tautology about a parameter with
+        # no likelihood term. That is circular and proved nothing.
+        #
+        # Here both the state effect and log_capture enter the linear predictor
+        # additively, exactly as the real model would if it tried to estimate
+        # them separately. The likelihood can therefore move log_capture if the
+        # data contain ANY information about it; the confounding claim is that
+        # it cannot. That is now a falsifiable test rather than a restatement
+        # of the graph.
+        beta_state = pm.Normal("beta_state", mu=mean_log_rate, sigma=2.0, shape=n_states)
+        log_obs_rate = (pm.math.dot(X_cov, beta_cov) + beta_state[state_index]
+                         + log_capture[state_index] + spatial)
+        # True rate = observed rate with the capture factor removed, i.e. the
+        # free state effect without log_capture. Under the confounding claim,
+        # the likelihood pins (beta_state + log_capture) but not either alone,
+        # so this quantity should inherit the capture prior's full spread.
         pm.Deterministic("true_rate", pm.math.exp(log_obs_rate - log_capture[state_index]) * 100_000)
         pm.NegativeBinomial("obs", mu=pm.math.exp(log_exposure + log_obs_rate),
                              alpha=alpha, observed=y)
@@ -144,6 +174,8 @@ def main() -> None:
     args = ap.parse_args()
 
     merged, W = load_conus_graph_with_covariates()
+    X_full, _, _, _, _ = build_design_matrix(merged)
+    scale_full = compute_bym2_scale(W)
     states = sorted(merged["state_abbr"].unique())
     state_index = merged["state_abbr"].map({s: i for i, s in enumerate(states)}).to_numpy()
 
@@ -155,7 +187,7 @@ def main() -> None:
         mean_implied_rate=("mu_log_c", lambda s: float(np.exp(s).mean())),
         sd_log=("sd_log_c", "first")).round(3).to_string())
 
-    observed = load_observed_rate_samples(merged)
+    observed = load_observed_rate_samples(merged, X_full, scale_full)
     print(f"\nLoaded production posterior: {observed.shape[0]} draws x {observed.shape[1]} counties")
 
     true_samples = lcr.true_rate_samples(observed, state_index, priors, seed=SEED)

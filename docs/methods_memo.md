@@ -547,7 +547,7 @@ as a validated "go visit these counties" list.
   precise: they're shrunk toward priors for exactly this reason, but shrinkage
   reduces noise, it doesn't manufacture missing ground truth.
 - Any state without its own calibration data is carrying OBDB's raw undercount
-  (7-52% observed range across the 9 calibration states, before the TX/WI
+  (7-54% observed range across the 23 calibration states/DC, before the TX/WI
   reference-quality caveats in Section 5.1) partially corrected by a wide,
   honestly-uncertain interval: not a precise correction.
 - The choropleth and rankings are **not** capture-rate-corrected by default
@@ -709,7 +709,7 @@ by the script so the difference is visible (420 counties clear uncorrected
 p<0.05, vs. ~155 expected by chance; FDR trims this to 222 significant
 counties, still a large excess over the null).
 
-**Result: 217 hot spots, 5 cold spots.** The hot spots are not scattered: their connected-component structure (via the same Queen contiguity graph)
+**Result: 220 hot spots, 7 cold spots.** The hot spots are not scattered: their connected-component structure (via the same Queen contiguity graph)
 collapses into 13 components, 8 multi-county, with five real regional
 clusters:
 
@@ -725,7 +725,7 @@ Top hot spots by z-score are dominated by exactly these regions: Grand,
 Boulder, Larimer, Jefferson, Gilpin, Eagle, Summit, and Clear Creek
 Counties (CO); Yates, Schuyler, and Seneca Counties (NY, Finger Lakes);
 Skamania, Hood River, Washington, Lane, and Clackamas Counties (OR/WA);
-Chittenden (VT); Knox (ME); Leelanau (MI). The 5 cold spots are dense urban
+Chittenden (VT); Knox (ME); Leelanau (MI). The 7 cold spots are dense urban
 cores with low per-capita counts: Bergen (NJ), New York/Manhattan (NY),
 Hudson (NJ), Fulton (GA), Bronx (NY), the expected mirror image of a
 per-capita-rate hot spot analysis in dense metros.
@@ -1380,16 +1380,16 @@ at the same time, because `us_county_*.parquet` matches the new
 
 ### 18.2 The population floor: right problem, wrong instrument
 
-The floor is not paranoia. 1,915 of 3,222 counties (59%) have zero observed
-breweries, and unfloored the model paints 284 of them in the "3-6 per 100k" bin
+The floor is not paranoia. 1,916 of 3,222 counties (59%) have zero observed
+breweries, and unfloored the model paints 238 of them in the "3-6 per 100k" bin
 or darker, 14 of them in the top bin — Jackson County CO (0 breweries, 1,121
-adults 21+) lands at 50.5/100k, third-highest in the country. Commenters
+adults 21+) lands at 30.6/100k, 11th highest in the country. Commenters
 arguing the floor should simply be removed were wrong.
 
 But the floor as implemented had two separate problems:
 
 1. **Coverage.** It greyed 2,405 of 3,222 counties — **74.6% of the map** — to
-   suppress noise affecting 15.9% of breweries and 15.5% of the adult
+   suppress noise affecting 16.0% of breweries and 15.5% of the adult
    population. (A widely-upvoted comment said "only about a quarter of US
    counties are above 50,000", which is correct and is the same fact stated
    from the other side.)
@@ -1440,7 +1440,8 @@ Checked directly, they were right, and the bias was systematic:
 | St. Louis city MO | 20 | 11.1 | 0.010 |
 | Deschutes (Bend) OR | 30 | 19.3 | 0.014 |
 
-**Cause: there was no urbanicity term anywhere in the linear predictor.** The
+**Candidate cause (later shown INSUFFICIENT — see the table below): there was
+no urbanicity term anywhere in the linear predictor.** The
 covariate list ran income, age, college share, tourism, population growth,
 unemployment, rent — no density. `density_per_sqmi` was computed upstream in
 `build_national_county_dataset.py` and simply never wired in. With no density
@@ -1478,8 +1479,9 @@ it toward. `scripts/test_spatial_term_urban_bias.py` tests this directly by
 fitting the identical covariate + state-FE design with and without the BYM2
 term on the same seeded split.
 
-**The result refutes the hypothesis.** Dropping the spatial term makes
-well-observed counties fit *worse*, not better, on every measure:
+**The result is directionally against the hypothesis, but does NOT refute it.**
+Dropping the spatial term makes well-observed counties score worse on held-out
+log-likelihood:
 
 | | + BYM2 | no spatial term |
 |---|---|---|
@@ -1488,19 +1490,44 @@ well-observed counties fit *worse*, not better, on every measure:
 | top raw-rate quintile, median model/raw ratio | **0.648** | 0.494 |
 | mean abs log error, well-observed | **0.2747** | 0.4475 |
 
-Without the spatial term the model shrinks high-rate counties *harder*, not
-less. The BYM2 effect is the component letting a county like Boulder or
-Deschutes sit above what its covariates and state baseline alone would
-predict; removing it forces all of that deviation back onto the state
-intercept, which is a much blunter instrument. (These are train-fold fits, so
-absolute levels differ from the production fit — Fulton is in the test fold —
-but the between-model comparison on the identical split is the point.)
+**Why this is weaker evidence than it first appears.** An earlier version of
+`bias_summary()` computed the ratio-based rows over ALL counties from a
+train-fold fit, so 141 of 169 counties were IN-SAMPLE. The two models are not
+equally flexible in sample: BYM2 gives every county its own free `theta_iid`
+plus a neighbour-informed `phi_icar`, while the no-spatial model has ZERO
+per-county latent parameters. A model with one free parameter per training
+observation fits its own training counties better whatever its spatial prior
+is doing, so those rows measured flexibility rather than the mechanism under
+test. The function now restricts every diagnostic to the held-out fold; the
+ratio figures above should be regenerated before being cited.
 
-**So what remains is not a bug.** The gap between a county's raw rate and its
-fitted rate is partial pooling working as designed: a hierarchical model
-deliberately reports less than the raw rate for counties that sit far above
-what their covariates, state, and neighbours predict, because some of that
-excess is expected to be noise. Fulton County genuinely is such a county —
+What survives cleanly is the held-out log-likelihood — but on **n = 28**
+well-observed test counties, with **no confidence interval reported**, and
+predictive log-likelihood rewards wider intervals as well as better point
+estimates, which is not the same as correcting a one-directional downward bias.
+
+So the honest status is: the BYM2-causes-the-bias hypothesis is **not
+supported** by this test, and also **not refuted** by it. Three hypotheses have
+now been advanced for the downward bias on well-observed urban counties
+(missing urbanicity, spatial smoothing, ordinary partial pooling) and none has
+been cleanly established. The bias itself is real and reproducible at
+production scale: among 172 counties with >=10 breweries the median model/raw
+ratio is 0.884 and the top quintile is cut ~32%.
+
+**Is what remains simply partial pooling?** That is the right null hypothesis,
+and in principle a hierarchical model SHOULD report less than the raw rate for
+counties sitting far above what their covariates, state and neighbours predict.
+But this project's own calibration check argues against calling it settled: for
+the well-observed stratum (n=170), `us_county_combined_calibration.csv` reports
+**3.53% of counties above their 95% posterior predictive interval and 0.00%
+below**, against a nominal ~2.5% in EACH tail. Zero counties below, where ~4.25
+are expected, has p ~= 0.014.
+
+Properly-calibrated shrinkage produces symmetric tail exceedance. A
+one-directional failure is the same signature used at the top of this section
+to DIAGNOSE the problem, so it cannot also be the evidence that the problem is
+benign. Either the variance components are too tight for the real heterogeneity
+among high-rate counties, or an effect concentrated in that group is missing. Fulton County genuinely is such a county —
 28 observed against ~12 predicted from dense-urban covariates plus Georgia's
 state baseline.
 
@@ -1544,8 +1571,9 @@ fix; the variant is fit and reported in the holdout table either way.
 ### 18.4 Data quality: real holes, and one complaint that was wrong
 
 `brewery_type` filtering removes correctly-typed cideries and meaderies, but
-OBDB is crowdsourced and the type field is frequently wrong. 45 records that
-pass the type filter name a competing beverage category in their own name.
+OBDB is crowdsourced and the type field is frequently wrong. 113 records that
+pass the type filter name a competing beverage category in their own name, 31 of
+them with no brewing token at all.
 A reader flagged Leelanau County, MI — Michigan wine country — ranking near the
 top on five records; two of them ("Green Bird Cellars and Organic Farms", a
 winery typed `micro`; "Sugarfoot Saloon", a bar) are not breweries. At 18,638
@@ -1709,14 +1737,22 @@ log c) is what the data identify, which is exactly the model already fitted,
 and true-scale rates follow by dividing the existing posterior by DRAWS from
 the capture prior.
 
-That is a strong claim, so `scripts/fit_latent_capture_rate_model.py` tests it
-rather than asserting it, via a direct joint fit with log_capture as an
-explicit parameter:
+The ANALYTIC argument is decisive on its own: the likelihood is invariant under
+`beta_state_s -> beta_state_s + k`, `log(c_s) -> log(c_s) - k`, provable by
+inspection with no simulation needed.
+`scripts/fit_latent_capture_rate_model.py` attempts empirical confirmation on
+top of it:
 
-- **Test 1, identification.** If the counts cannot move the capture rate, its
-  posterior must equal its prior. Median mean-shift **0.013 prior sds**
-  (max 0.063 across all 49 states); posterior/prior sd ratio **0.999**. The
-  posterior is the prior.
+- **Test 1, identification.** NOTE: the first version of this test was
+  CIRCULAR and its reported numbers (mean-shift 0.013 prior sds, sd ratio
+  0.999) must be disregarded. It fitted the orthogonal parameterization, in
+  which `log_capture` appears only in a Deterministic and never in the
+  likelihood, so its posterior was forced to equal its prior BY CONSTRUCTION.
+  The test measured only that PyMC samples a parameter carrying no likelihood
+  term: a tautology about the model graph, not evidence about the data. It now
+  fits the NAIVE parameterization, with a free state effect and `log_capture`
+  both entering the linear predictor additively, so the likelihood CAN move
+  `log_capture` if the data carry information about it. Rerun before citing.
 - **Test 2, equivalence.** Convolution vs. joint fit on the same observed
   rates: median |relative difference| **0.0024** (point estimate), 0.0056 and
   0.0069 on the interval bounds; correlations >= 0.9999.
@@ -1730,3 +1766,32 @@ is what makes the test runnable on a 16GB machine at all.
 Consequence for the headline: the observed-scale posterior is untouched, so the
 map does not move. Only the true-scale quantity gains the uncertainty it should
 always have carried.
+
+### 18.10 Puerto Rico rows in the "3,222 county" universe (open defect)
+
+Surfaced by an audit of this round, not by the reader feedback, and NOT fixed
+here because fixing it changes headline denominators and belongs in its own
+change.
+
+`data/processed/us_county_analysis.parquet` -- the 3,222-row universe every
+county-level number in this project is drawn from -- contains **78 Puerto Rico
+municipios**, all with `obdb_count = 0`, 2.59M adults 21+, and
+**`state_abbr = NaN`**. Section 3 of this memo states the opposite
+("territories not present"), so the documentation and the data disagree.
+
+Consequences actually observed:
+
+- `us_county_brewery_deserts.csv` ranks **San Juan Municipio, PR at #5
+  nationally** (272,420 adults, 0 breweries). The README's prose summary of
+  that same ranking silently skips ranks 5 and 6, so the narrative and the
+  file it describes do not match.
+- `state_rollup_table.csv` correctly excludes PR (51 rows = 50 states + DC),
+  so the exclusion is applied inconsistently across outputs.
+- PR is absent from the CONUS modelling universe (3,109 counties) regardless,
+  so no *model* estimate is affected -- this is a descriptive-output and
+  documentation problem, not an inference one.
+
+The right fix is to decide explicitly whether territories are in scope, apply
+that decision in ONE place upstream (`build_national_county_dataset.py`), and
+restate Section 3 to match. Anything else leaves the two in conflict again
+after the next refresh.

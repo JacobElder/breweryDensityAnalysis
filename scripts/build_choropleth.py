@@ -19,18 +19,18 @@ Produces three versions:
 
 WHY THE FLOORED VERSION IS NO LONGER THE DEFAULT
 ------------------------------------------------
-The population floor is a real guard against a real problem. 1,915 of 3,222
-counties (59%) have ZERO observed breweries, and without a floor 284 of them
+The population floor is a real guard against a real problem. 1,916 of 3,222
+counties (59%) have ZERO observed breweries, and without a floor 238 of them
 paint in the "3-6 per 100k" bin or darker purely from the model's prior --
-Jackson County CO (0 breweries, 1,121 adults 21+) lands at 50.5 per 100k, the
-third-highest rate in the country. So "just show the raw data" is not
+Jackson County CO (0 breweries, 1,121 adults 21+) lands at 30.6 per 100k, 11th
+highest in the country. So "just show the raw data" is not
 available; the model has to say something about counties where nothing was
 observed, and a floor is one way to decline to show it.
 
 But a hard floor is the wrong instrument, for two reasons:
 
 1. COVERAGE. The floor greys 2,405 of 3,222 counties -- 74.6% of the map --
-   to suppress noise affecting 15.9% of breweries and 15.5% of the adult
+   to suppress noise affecting 16.0% of breweries and 15.5% of the adult
    population. Three-quarters of the country is withheld to protect a sixth
    of the data.
 
@@ -61,8 +61,8 @@ OTHER LEGEND FIXES APPLIED HERE
 - The AK and HI insets are labelled with the model that actually produced
   them. Those 35 counties have no Queen-contiguity neighbours and so fall back
   to Model A (flat-mean shrinkage), not the BYM2 model named in the caption.
-  Several sit pinned at the prior mean (Denali 5.04, Haines 5.05,
-  Hoonah-Angoon 5.01 per 100k) -- an artifact of the fallback, not a finding.
+  Several sit pinned at the prior mean (Denali 4.96, Haines 4.96,
+  Hoonah-Angoon 4.93 per 100k) -- an artifact of the fallback, not a finding.
 
 Labeling is collision-aware (src/breweries/map_labels.py), not a fixed list:
 the original face-validity cities are placed first as priority anchors, then

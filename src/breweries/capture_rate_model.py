@@ -137,7 +137,7 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
 
     For a calibrated state, returns its empirical rate with no extrapolation
     uncertainty. For any other state, returns the pooled rate with a 95% interval
-    wide enough to reflect that it's estimated from only 13 groups — do not read
+    wide enough to reflect that it's estimated from only 23 groups — do not read
     the interval bounds as precise; they exist to keep downstream users from
     treating a single national number as more certain than it is.
     """

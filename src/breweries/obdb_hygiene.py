@@ -6,8 +6,9 @@ WHY THIS EXISTS (and why `brewery_type` filtering isn't enough)
 `obdb.apply_inclusion_rule` filters on OBDB's `brewery_type` field, which
 excludes `cidery`/`meadery`/`closed`/`planning` outright. That protects
 against *correctly typed* non-breweries only. OBDB is crowdsourced, and the
-type field is frequently wrong: 45 records that pass the type filter carry a
-competing beverage category in their own name, e.g.
+type field is frequently wrong: 113 records that pass the type filter carry a
+competing beverage category in their own name, and 31 of those carry no brewing
+token at all, e.g.
 
     Green Bird Cellars and Organic Farms   type=micro      (a winery)
     Citizen Cider                          type=regional   (a cidery)

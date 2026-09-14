@@ -3,7 +3,7 @@
 Every ranking/output artifact in this project so far is county-level, even
 though state is a first-class unit in the project's own methodology: the
 capture-rate correction model (src/breweries/capture_rate_model.py) is
-calibrated PER STATE -- 13 states have a directly-measured empirical capture
+calibrated PER STATE -- 23 states/DC have a directly-measured empirical capture
 rate from real licensee registries, and every other state falls back to a
 pooled WLS-regression estimate (see that module's docstring for the full
 rationale). This script is the state-level summary table that calibration
@@ -150,7 +150,7 @@ def main() -> None:
     print("=" * 78)
     calibrated = state_table[state_table["correction_source"] == "calibrated"]
     pooled = state_table[state_table["correction_source"] == "pooled_extrapolation"]
-    for label, sub in [("Calibrated (13 states)", calibrated), ("Pooled/regression-estimated", pooled)]:
+    for label, sub in [("Calibrated (23 states)", calibrated), ("Pooled/regression-estimated", pooled)]:
         vals = sub["mean_rank_change_pop50k"].dropna()
         print(f"{label}: n={len(vals)}, "
               f"mean of state means={vals.mean():.2f}, "

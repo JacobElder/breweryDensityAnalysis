@@ -270,7 +270,7 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None) -> None:
 
     fig.text(0.5, 0.01,
               "Sources: Open Brewery DB, Census ACS 5-year (2020-2024), empirical Bayes shrinkage, "
-              "and the 13-state capture-rate correction model (calibrated states use their empirical "
+              "and the 23-state capture-rate correction model (calibrated states use their empirical "
               "rate; other states use the pooled WLS-regression rate + density adjustment, capped at "
               "1.0). Corrected counts are rounded to the nearest integer before shrinkage — see "
               "scripts/build_corrected_rankings.py docstring for why.",
