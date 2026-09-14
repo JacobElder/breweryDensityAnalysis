@@ -1795,3 +1795,39 @@ The right fix is to decide explicitly whether territories are in scope, apply
 that decision in ONE place upstream (`build_national_county_dataset.py`), and
 restate Section 3 to match. Anything else leaves the two in conflict again
 after the next refresh.
+
+### 18.11 How much of the n=28 problem is the sample size?
+
+Section 18.3 flags that the surviving BYM2-vs-no-spatial evidence rests on 28
+held-out well-observed counties with no confidence interval. It is worth
+separating two distinct complaints, because only one of them is likely to be
+binding.
+
+Per-county held-out log predictive density has sd ~0.511 nats across
+well-observed counties (NB at the fitted rates, alpha~0.2). For a PAIRED
+comparison the relevant spread is `sd * sqrt(2*(1-rho))`, where rho is the
+county-by-county correlation between the two models' log-liks:
+
+| rho | sd of difference | SE (n=28) | 95% half-width | vs. observed +0.1494 |
+|---|---|---|---|---|
+| 0.99 | 0.072 | 0.0137 | 0.027 | clears 0 |
+| 0.95 | 0.162 | 0.0305 | 0.060 | clears 0 |
+| 0.90 | 0.228 | 0.0432 | 0.085 | clears 0 |
+| 0.80 | 0.323 | 0.0611 | 0.120 | clears 0 |
+| 0.50 | 0.511 | 0.0965 | 0.189 | includes 0 |
+| 0.00 | 0.722 | 0.1365 | 0.268 | includes 0 |
+
+The break-even is around rho ~ 0.65. Two models sharing the same covariates,
+the same state fixed effects and the same data, differing only by a spatial
+random effect, would ordinarily agree far above that — so n=28 is PROBABLY
+adequate, and the small sample is probably not what undermines the claim.
+
+What actually undermined it was the train/test contamination (Section 18.3):
+that was a bias in the estimate, not merely noise around it, and no sample
+size fixes it.
+
+But "probably adequate" is not "verified", and rho is precisely the quantity
+the old aggregate-only reporting threw away. `nb_holdout_loglik_per_county()`
+and `paired_bootstrap_ci()` now retain and use it, so the next run answers
+this directly instead of inviting this estimate. The table above is a bound on
+what can be said WITHOUT that run, not a substitute for it.
