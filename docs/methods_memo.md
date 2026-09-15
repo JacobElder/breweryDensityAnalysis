@@ -2074,3 +2074,50 @@ CONSEQUENCES FOR THIS PROJECT
 This was proposed in this session as the highest-value remaining improvement.
 It was wrong: the option does not exist. Recorded here so the same
 recommendation is not made again.
+
+### 18.17 CBP cannot extend calibration beyond the 23 states — but the union can
+
+Section 18.16 established that the 23-state registry ceiling is permanent,
+since TTB brewery data is statutorily confidential. CBP covers 497 counties
+nationally, including 151 counties across 27 of the 28 uncalibrated states, so
+the obvious question is whether it can supply a state-specific capture estimate
+where no registry exists — replacing the single national constant
+(`POOLED_CAPTURE_RATE = 0.610`) that 29.6% of US adults currently rely on.
+
+**It cannot.** Leave-one-state-out across the 18 trustworthy registry states,
+predicting each state's true brewery count:
+
+| method | median abs. error | 90th pct | closest in |
+|---|---|---|---|
+| pooled national constant (current fallback) | 22.3% | 42.3% | 8 / 18 |
+| **CBP × ratio learned from other states** | **28.2%** | 53.0% | 2 / 18 |
+| **union × ratio learned from other states** | **14.7%** | **30.4%** | 8 / 18 |
+
+CBP is *worse* than the constant it would replace. The reason is visible in the
+state-level ratios: registry truth / CBP ranges from 1.09 (NJ) to 2.73 (NE),
+a coefficient of variation of 0.27. That spread is brewpub misclassification
+varying by state — states differ in brewpub share, and CBP files brewpubs under
+NAICS 722511 rather than 312120. A national CBP-to-truth factor therefore
+transports badly, and knowing a state's CBP count tells you less about its true
+brewery population than knowing nothing and using the national average.
+
+This is a genuine negative result, recorded so the idea is not revisited: CBP's
+value is corroboration (Section 18.15), not calibration.
+
+**The same test found something useful, though.** Scaling the OBDB ∪ OSM union
+by a learned factor predicts state truth at 14.7% median error against the
+current fallback's 22.3% — a third better, and with a much tighter tail (30.4%
+vs 42.3% at the 90th percentile). That is consistent with 18.12 and 18.15: the
+union is simply closer to truth than OBDB is, so a fallback built on it starts
+from a better place.
+
+RECOMMENDED, NOT YET APPLIED
+----------------------------
+Replacing the pooled fallback for the 28 uncalibrated states with a
+union-based estimate is the natural next change. It is deliberately NOT made
+here, because capture rates and brewery counts are not independent (Section
+18.13): changing the fallback changes `capture_rate`, which changes
+`obdb_corrected`, which feeds outputs that would then disagree with a model
+still fitted on OBDB-only counts. The correct sequence is to re-derive capture
+rates on the union numerator and refit in one pass, not to change one end of
+the chain mid-stream.
