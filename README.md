@@ -56,6 +56,34 @@ vanish on the rate map — and that difference is the finding, not an artifact.
 
 ![Raw brewery count per US county, proportional symbols](docs/images/brewery_count_map.png)
 
+> **The two maps above use different brewery counts, deliberately.** The rate
+> map is built on OBDB alone (6,626 records); the count map is built on the
+> OBDB ∪ OSM union (8,369). They are not yet consistent because wiring the
+> union into the *model* requires re-deriving the capture rates against the
+> union numerator first — doing it in the wrong order double-corrects (see
+> `docs/methods_memo.md` §18.13). Until that happens, **prefer the count map
+> for "how many breweries are there"**: scored against the 18 state registries
+> with trustworthy ground truth, the union is a median 13.9% from truth while
+> the modelled rate is 33.7% off (§18.12).
+
+## Which output should I use?
+
+Several estimators are shipped side by side and they will disagree for the same
+county. This is deliberate, but the differences are not self-evident from the
+filenames:
+
+| File | Count source | Model |
+|---|---|---|
+| `docs/images/brewery_count_map.png` | OBDB ∪ OSM union | none — raw counts |
+| `docs/images/choropleth.png` (rate map) | OBDB only | covariates + state FE + BYM2 |
+| `us_brewery_density_choropleth_floored.png` | OBDB only | same, with a population floor |
+| `us_brewery_density_choropleth_corrected*.png` | OBDB, capture-rate corrected | EB shrinkage, no spatial term |
+| `us_brewery_density_comparison.png` | three panels: raw / shrunken / corrected | comparison figure |
+| `us_top50_{cbsa,place}_*.png` | OBDB only | EB shrinkage (no spatial equivalent exists at these levels) |
+
+Against external ground truth the union-backed count map is the most accurate
+by a wide margin; see `docs/methods_memo.md` §18.12.
+
 ## Setup
 
 This repo lives under `~/Documents` (iCloud-synced). Keep `.venv` **outside**
@@ -74,6 +102,59 @@ https://api.census.gov/data/key_signup.html.
 
 Run tests: `UV_PROJECT_ENVIRONMENT=... uv run pytest tests/` (111 tests,
 statistical-correctness regression coverage).
+
+## Reproducing the pipeline
+
+`data/` is gitignored, so a fresh clone starts empty. There is no single runner;
+the order below is the dependency chain, and steps marked ⚠ cannot be skipped
+or reordered.
+
+```bash
+# 0. Census API key in .env (CENSUS_API_KEY=...) — needed by every ACS step.
+python scripts/fetch_national_osm.py            # Overpass, rate-limited, slow
+python scripts/fetch_national_tiger_places.py   # Census TIGER
+
+# 1. Brewery records -> counties
+python scripts/geocode_national.py              # also runs the hygiene pass
+python scripts/build_obdb_osm_union.py          # OSM record linkage
+python scripts/build_union_county_counts.py     # filtered union + acceptance test
+
+# 2. Per-state licensee calibration (23 states), then the capture-rate model
+python scripts/build_{state}_county_dataset.py  # one per calibrated state
+python scripts/build_capture_rate_model.py
+
+# 3. National assembly  ⚠ must follow 1 and 2
+python scripts/build_national_county_dataset.py
+python scripts/build_national_cbsa_place_datasets.py
+
+# 4. Models  ⚠ Model A before the combined model (it supplies the AK/HI fallback)
+python scripts/fit_national_models.py           # Model A, closed form
+python scripts/build_spatial_hotspots.py        # Gi*, used by the direction check
+python scripts/fit_combined_spatial_covariate_model.py   # NUTS — see memory note
+
+# 5. Rendered outputs
+python scripts/build_choropleth.py
+python scripts/build_corrected_rankings.py
+python scripts/build_map_comparison.py
+python scripts/build_top50_table.py
+python scripts/build_top50_cbsa_table.py
+python scripts/build_top50_place_table.py
+python scripts/build_brewery_deserts.py
+python scripts/build_state_rollup_table.py
+python scripts/build_interactive_map.py && python scripts/assemble_interactive_map_html.py
+```
+
+**Memory.** Step 4's combined model is a ~6,300-parameter NUTS fit. Peak RSS
+scales with parallel chains, not with draws: `FINAL_CORES = 1` (sequential) is
+what makes it fit on a 16GB machine, and even then the post-processing peak has
+OOM-killed runs. It writes a ~1.7GB checkpoint that
+`fit_latent_capture_rate_model.py` then reads. Budget a machine with real
+headroom, or expect to tune `FINAL_DRAWS`.
+
+**Ordering traps.** Capture rates are defined as OBDB count / licensee count,
+so any change to the brewery count invalidates them — re-derive before refitting
+(`docs/methods_memo.md` §18.13). Step 4's Model A must precede the combined
+model, which reads it for the 35 AK/HI counties that have no contiguity graph.
 
 ## Layout
 
