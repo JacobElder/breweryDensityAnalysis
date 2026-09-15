@@ -1920,7 +1920,7 @@ What breaks if step 3 runs first:
   recovered part of that gap through OSM — a double correction, inflating the
   true-rate estimate past what either source supports.
 
-### 18.14 Calibrated capture rates claim zero uncertainty regardless of registry size (open defect)
+### 18.14 Calibrated capture rates claimed zero uncertainty regardless of registry size (FIXED)
 
 `correction_factor()` returns `ci_low=None, ci_high=None` for all 23 calibrated
 states, on the rationale that a measured rate carries no extrapolation
@@ -1934,7 +1934,26 @@ by interval width, and `latent_capture_rate.CALIBRATED_LOG_SD` applies one flat
 as among the most confidently drawn on the map purely because it has a registry
 at all — the opposite of what its sample size supports.
 
-Fix: treat `obdb_count ~ Binomial(licensee_count, capture_rate)` and attach a
-Wilson or Jeffreys interval, at minimum for the small-n states, then let
-`CALIBRATED_LOG_SD` vary by state instead of being a constant. One call to
-`statsmodels.stats.proportion.proportion_confint`. No MCMC.
+FIXED. `latent_capture_rate.calibrated_log_sds()` now derives each calibrated
+state's log-sd from a Jeffreys interval on
+`obdb_count ~ Binomial(licensee_count, capture_rate)`:
+
+| state | licensees | log-sd (was a flat 0.10) |
+|---|---|---|
+| DC | 14 | 0.202 |
+| VA | 413 | 0.050 |
+| CA | 1,270 | 0.030 (floored) |
+
+A floor of 0.03 applies, because binomial sampling is not the only error in a
+capture rate -- record linkage, registry currency and license category all
+contribute, so California's n=1,270 should not read as 0.3% certain.
+
+The five states whose measured ratio EXCEEDS 1.0 (MO 1.85, TX 1.43, WY 1.43,
+IL 1.18, WV 1.00) are deliberately NOT given a binomial interval. Their
+reference is wrong, not their sample, so a tight sampling interval there would
+claim near-certainty about precisely the states whose ground truth is least
+trustworthy. They take the pooled width (0.326) instead.
+
+Effect on the published output: the calibrated stratum's median true-rate
+interval widens from 1.506 to 1.552 (log scale), i.e. small-registry states
+stop being drawn as more confident than their sample size supports.

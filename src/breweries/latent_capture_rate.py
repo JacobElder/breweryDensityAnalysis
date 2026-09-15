@@ -90,15 +90,70 @@ from breweries.capture_rate_model import (
 # TX 1.222) and are then clipped -- direct evidence that these numbers are not
 # exact.
 #
-# 0.10 (~10% relative) is a deliberately modest allowance: large enough that
-# calibrated states are not treated as noiseless, small enough that they stay
-# clearly better-determined than the pooled ones (whose sd is 0.326, ~3x
-# wider). It is a documented sensitivity knob, not an estimate -- there is no
-# repeated-measurement design here that could estimate it.
+# 0.10 (~10% relative) is the FALLBACK when a state's licensee count is
+# unavailable. It is not used as a flat value any more, because a flat value is
+# wrong in both directions at once: the measured registries range from 14
+# licensees (DC) to 1,270 (CA), whose Jeffreys binomial log-sds are 0.202 and
+# 0.003 respectively. A single 0.10 is 2x too NARROW for DC and 33x too WIDE
+# for California.
+#
+# That mattered once the headline map began fading counties by interval width
+# (methods memo 18.9): a 14-licensee state was being rendered as among the most
+# confidently drawn on the map purely because it happened to have a registry at
+# all, which is the opposite of what its sample size supports.
 CALIBRATED_LOG_SD = 0.10
+
+# Floor on a calibrated state's log-sd. Binomial sampling error is not the only
+# error in a capture rate -- record linkage, registry currency and license
+# category all contribute -- so even California's n=1,270 should not be treated
+# as 0.3% certain.
+MIN_CALIBRATED_LOG_SD = 0.03
+
+# Log-sd used for a state whose measured ratio EXCEEDS 1.0. Those five states
+# (MO 1.85, TX 1.43, WY 1.43, IL 1.18, WV 1.00) have registries documented as
+# incomplete, so their binomial interval is not merely tight but meaningless:
+# the reference, not the sample, is what is wrong. Treating them with a narrow
+# sampling interval would claim near-certainty about the states whose ground
+# truth is least trustworthy. They get the pooled width instead.
+CLIPPED_REGISTRY_LOG_SD = float(BETWEEN_STATE_LOG_SD)
+
+CALIBRATION_PATH = "data/processed/pooled_calibration_with_density.parquet"
 
 # A capture rate is a share of a true population, so c <= 1 and log(c) <= 0.
 LOG_CAPTURE_UPPER = 0.0
+
+
+def calibrated_log_sds(path: str = CALIBRATION_PATH) -> dict[str, float]:
+    """Per-state log-sd for a calibrated capture rate, from the size of the
+    registry it was measured against.
+
+    Uses a Jeffreys interval on `obdb_count ~ Binomial(licensee_count, rate)`
+    and converts the resulting bounds to a log-scale sd. Returns {} if the
+    calibration file is absent, so callers fall back to CALIBRATED_LOG_SD.
+    """
+    from pathlib import Path
+
+    if not Path(path).exists():
+        return {}
+    from statsmodels.stats.proportion import proportion_confint
+
+    df = pd.read_parquet(path)
+    g = df.groupby("state")[["obdb_count", "licensee_count"]].sum()
+    out: dict[str, float] = {}
+    for state, row in g.iterrows():
+        n = float(row["licensee_count"])
+        k = float(row["obdb_count"])
+        if n <= 0:
+            continue
+        if k > n:  # registry known incomplete -- see CLIPPED_REGISTRY_LOG_SD
+            out[state] = CLIPPED_REGISTRY_LOG_SD
+            continue
+        lo, hi = proportion_confint(k, n, method="jeffreys")
+        hi = min(float(hi), 1.0)
+        lo = max(float(lo), 1e-6)
+        sd = (np.log(hi) - np.log(lo)) / (2 * 1.96)
+        out[state] = max(float(sd), MIN_CALIBRATED_LOG_SD)
+    return out
 
 
 def state_capture_priors(
@@ -114,13 +169,14 @@ def state_capture_priors(
     optionally supplies the density used by the pooled model's density
     adjustment; omit it to use the pooled rate at mean density.
     """
+    per_state_sd = calibrated_log_sds()
     rows = []
     for state in states:
         log_density = (mean_log_density_by_state or {}).get(state)
         cf = correction_factor(state, log_density=log_density)
         rate = float(np.clip(cf["capture_rate"], 1e-3, 1.0))
         if state in CALIBRATED_STATE_CAPTURE_RATES:
-            sd = CALIBRATED_LOG_SD
+            sd = per_state_sd.get(state, CALIBRATED_LOG_SD)
         else:
             sd = float(BETWEEN_STATE_LOG_SD)
         rows.append({"state_abbr": state, "mu_log_c": float(np.log(rate)),

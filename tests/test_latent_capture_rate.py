@@ -14,14 +14,19 @@ import pandas as pd
 import pytest
 
 from breweries import latent_capture_rate as lcr
+from breweries.capture_rate_model import BETWEEN_STATE_LOG_SD  # noqa: F401
 from breweries.capture_rate_model import CALIBRATED_STATE_CAPTURE_RATES
 
 
 class TestStateCapturePriors:
     def test_calibrated_state_uses_measured_rate_and_tight_sd(self):
+        """sd is no longer a flat constant -- it is derived from the size of
+        the registry the rate was measured against (see TestCalibratedLogSds).
+        What must hold is that a calibrated state is clearly better determined
+        than a pooled extrapolation, and that the MEAN is the measured rate."""
         p = lcr.state_capture_priors(["GA"])
         assert p["source"].iloc[0] == "calibrated"
-        assert p["sd_log_c"].iloc[0] == lcr.CALIBRATED_LOG_SD
+        assert 0 < p["sd_log_c"].iloc[0] < BETWEEN_STATE_LOG_SD
         expected = min(CALIBRATED_STATE_CAPTURE_RATES["GA"], 1.0)
         assert np.isclose(np.exp(p["mu_log_c"].iloc[0]), expected)
 
@@ -40,6 +45,38 @@ class TestStateCapturePriors:
         assert list(p["state_abbr"]) == states
         assert p["sd_log_c"].gt(0).all()
         assert np.isfinite(p["mu_log_c"]).all()
+
+
+class TestCalibratedLogSds:
+    """A calibrated capture rate's uncertainty must scale with the size of the
+    registry it was measured against. A flat constant is wrong in both
+    directions: the registries run from 14 licensees (DC) to 1,270 (CA)."""
+
+    def test_small_registry_is_far_less_certain_than_large(self):
+        sds = lcr.calibrated_log_sds()
+        if not sds:
+            pytest.skip("calibration file not present")
+        assert sds["DC"] > 4 * sds["CA"], (
+            f"DC (n=14) sd {sds['DC']:.3f} should dwarf CA (n=1270) {sds['CA']:.3f}")
+
+    def test_floor_is_respected(self):
+        sds = lcr.calibrated_log_sds()
+        if not sds:
+            pytest.skip("calibration file not present")
+        assert min(sds.values()) >= lcr.MIN_CALIBRATED_LOG_SD
+
+    def test_states_with_broken_registries_are_not_treated_as_certain(self):
+        """MO/TX/WY/IL report more OBDB records than licensees, so the
+        REFERENCE is wrong, not the sample. A tight binomial interval there
+        would claim near-certainty about the least trustworthy ground truth."""
+        sds = lcr.calibrated_log_sds()
+        if not sds:
+            pytest.skip("calibration file not present")
+        for st in ("TX", "MO", "WY"):
+            assert sds[st] == pytest.approx(lcr.CLIPPED_REGISTRY_LOG_SD)
+
+    def test_missing_calibration_file_falls_back_gracefully(self):
+        assert lcr.calibrated_log_sds(path="/nonexistent/path.parquet") == {}
 
 
 class TestSampleLogCapture:
