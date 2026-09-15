@@ -473,8 +473,13 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     count_col, source_note = "obdb_count", "Open Brewery DB"
     if os.path.exists(union_path):
         u = pd.read_parquet(union_path)
-        gdf = gdf.merge(u[["county_geoid", "union_count"]],
-                         left_on="GEOID", right_on="county_geoid", how="left")
+        # Rename rather than merge on right_on: gdf already carries a
+        # `county_geoid` from load_county_geodata(), so a second merge bringing
+        # its own would silently become county_geoid_x/_y and break any later
+        # reference to the bare name.
+        gdf = gdf.merge(
+            u[["county_geoid", "union_count"]].rename(columns={"county_geoid": "GEOID"}),
+            on="GEOID", how="left")
         gdf["union_count"] = gdf["union_count"].fillna(gdf["obdb_count"])
         count_col, source_note = "union_count", "Open Brewery DB union OpenStreetMap"
     gdf = gdf[gdf[count_col].notna()].copy()

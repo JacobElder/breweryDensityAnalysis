@@ -170,8 +170,15 @@ REVIEWED_KEEP_BY_NAME: dict[tuple[str, str], str] = {
 
 def normalize_name(s: pd.Series) -> pd.Series:
     """Lowercase, strip everything but alphanumerics. Used as the join key for
-    the reviewed-exclusion tables and for duplicate detection."""
-    return s.fillna("").str.lower().str.replace(r"[^a-z0-9]", "", regex=True)
+    the reviewed-exclusion tables and for duplicate detection.
+
+    Coerces to string first: an EMPTY column arrives as float64, and the `.str`
+    accessor raises AttributeError on it rather than returning an empty result.
+    That turns a legitimate edge case -- no records for a state, an empty
+    reference frame -- into a crash several call frames away from the cause.
+    """
+    return (s.astype("string").fillna("").str.lower()
+            .str.replace(r"[^a-z0-9]", "", regex=True))
 
 
 def flag_non_brewery_candidates(df: pd.DataFrame) -> pd.DataFrame:

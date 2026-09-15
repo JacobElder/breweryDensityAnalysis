@@ -1831,3 +1831,110 @@ the old aggregate-only reporting threw away. `nb_holdout_loglik_per_county()`
 and `paired_bootstrap_ci()` now retain and use it, so the next run answers
 this directly instead of inviting this estimate. The table above is a bound on
 what can be said WITHOUT that run, not a substitute for it.
+
+### 18.12 Scored against external truth, the modelling layer is the wrong place to have spent the effort
+
+Every model-selection decision in this project was made on held-out
+log-likelihood — i.e. on how well a model predicts OBDB's own counts. That is
+a real quantity, but it is not accuracy. The 18 calibrated states with
+trustworthy registries allow the comparison that was never run: how close is
+each estimator to the number of breweries that actually exist?
+
+| estimator | median abs. error | median signed | closest in |
+|---|---|---|---|
+| raw OBDB count | 34.6% | −34.6% | 1 / 18 |
+| Model A (empirical-Bayes shrinkage) | 29.9% | −29.9% | 1 / 18 |
+| **Combined BYM2 (the adopted headline model)** | **33.7%** | −33.7% | **1 / 18** |
+| **OBDB ∪ OSM union, no model at all** | **13.9%** | −11.7% | **15 / 18** |
+
+Three things follow, and none of them is comfortable.
+
+**1. The union beats the adopted model by 20 percentage points, with no model
+at all.** Fixing the measurement was worth roughly twenty times more than
+every covariate, state effect, spatial prior and posterior in the project
+combined. This is the single most important number in this memo.
+
+**2. The adopted model is WORSE against truth than the simpler model it
+replaced.** Model A — closed-form empirical-Bayes shrinkage, no covariates, no
+spatial term, no MCMC — lands at 29.9% versus the combined model's 33.7%, and
+is closer in 7 of 18 states. Section 15.3 adopted the combined model because it
+"wins outright" on held-out log-likelihood. It wins at predicting OBDB. It
+loses at being right.
+
+**3. The adoption evidence was measuring partly leakage.** Section 18.3
+established that the random 80/20 split leaves 99.7% of held-out counties with
+a neighbour in training and 80.8% of their neighbours in training. A spatial
+model scored on that split is being rewarded for information it was handed.
+The headline choice should be treated as provisional, not settled.
+
+WHAT THIS DOES AND DOES NOT ESTABLISH
+-------------------------------------
+It does not show the model is useless. Registry states skew larger, more urban
+and better-observed — exactly the counties where a smoothing model has least
+work to do. The model's actual purpose is variance reduction in small-count
+counties (stopping a 0-brewery, 640-adult county reporting 983/100k, Section
+15.4), and no registry exists to score that population. This comparison
+structurally cannot see the model's best case.
+
+But it does establish that the model is not earning its place *for the
+quantity the map presents*, that a simpler estimator currently beats it on the
+only external check available, and that the ranking of priorities was
+backwards: measurement error was ~35x model error, and the effort went almost
+entirely into the model.
+
+RECOMMENDED CONSEQUENCE
+-----------------------
+Treat the count map (now union-backed) as the headline artifact, and the
+modelled rate map as a labelled smoothing layer rather than the primary
+ranking, until a state-block holdout re-runs the adoption decision without
+leakage. See 18.13 for the order in which the union has to be wired into the
+model — capture rates must be re-derived on the union numerator FIRST, or the
+correction double-counts.
+
+### 18.13 Wiring the union into the model: the order is not optional
+
+`us_county_union_counts.parquet` exists and only the count map consumes it.
+The model still reads `obdb_count` from `us_county_analysis.parquet`. Swapping
+that to `union_count` looks like a one-line change. It is not, because the
+capture rate and the brewery count are not independent: every calibrated
+capture rate in `capture_rate_model.py` is defined as OBDB count / licensee
+count.
+
+Correct order:
+
+1. Re-derive capture rates with the UNION as the numerator (`build_capture_rate_model.py`,
+   same 23 states, same WLS, different numerator column). Cheap, statsmodels,
+   no MCMC. `us_union_state_validation.csv`'s `capture_after` column is
+   effectively this already computed for the 23 states; it just has not been
+   fed back into a re-fit pooled model.
+2. Repoint `CALIBRATED_STATE_CAPTURE_RATES` / `POOLED_CAPTURE_RATE` at the new fit.
+3. Only then repoint the model's `y` at `union_count` and refit.
+
+What breaks if step 3 runs first:
+
+- With `CAPTURE_RATE_OFFSET = False` (the default), nothing breaks numerically.
+  The model just fits a larger, less biased count. This is the safe partial step.
+- With the offset ON, it breaks badly. The offset would divide union counts by
+  a capture rate still measuring OBDB's gap. Georgia: OBDB capture 0.476, so
+  the offset applies a ~2.1x correction to a numerator that has already
+  recovered part of that gap through OSM — a double correction, inflating the
+  true-rate estimate past what either source supports.
+
+### 18.14 Calibrated capture rates claim zero uncertainty regardless of registry size (open defect)
+
+`correction_factor()` returns `ci_low=None, ci_high=None` for all 23 calibrated
+states, on the rationale that a measured rate carries no extrapolation
+uncertainty. It still carries SAMPLING uncertainty, and several registries are
+small: **DC has 14 licensees, WY 28, WV 33, NE 66, CT 107.** A rate estimated
+against 14 licensees is not exact.
+
+This acquired a live consequence in 18.9: the headline map now fades counties
+by interval width, and `latent_capture_rate.CALIBRATED_LOG_SD` applies one flat
+0.10 to every calibrated state regardless of n. So a 14-licensee state renders
+as among the most confidently drawn on the map purely because it has a registry
+at all — the opposite of what its sample size supports.
+
+Fix: treat `obdb_count ~ Binomial(licensee_count, capture_rate)` and attach a
+Wilson or Jeffreys interval, at minimum for the small-n states, then let
+`CALIBRATED_LOG_SD` vary by state instead of being a constant. One call to
+`statsmodels.stats.proportion.proportion_confint`. No MCMC.

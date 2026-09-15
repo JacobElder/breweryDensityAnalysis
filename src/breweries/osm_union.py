@@ -98,10 +98,30 @@ _BRAND_SUFFIX_RE = re.compile(
 
 def brand_key(names: pd.Series) -> pd.Series:
     """Normalized brand: lowercase alphanumerics with brewing/outlet suffixes
-    stripped, so a brand and its taproom compare equal."""
+    stripped, so a brand and its taproom compare equal.
+
+    NEVER returns an empty string for a non-empty name. `(alt)+$` matches any
+    trailing RUN of suffix tokens, so a name built entirely out of them is
+    consumed whole: "Ale House Brewing Co" -- a real OBDB record in California
+    -- strips to "", as do "Brewery", "Tasting Room" and "Beerworks Brewing".
+
+    That matters because brand keys are compared as a set: every empty key in
+    a state collides with every other, so one generically-named OBDB record
+    would silently suppress every OSM addition in that state whose name is
+    also suffix-only, with nothing logged. It happens to be harmless in the
+    current snapshot (the one empty-key OBDB record is in CA and no CA
+    addition strips to empty), but crowdsourced data produces placeholder
+    names like "Brewery" routinely, so the next refresh could trip it.
+
+    Falling back to the unstripped normalized name keeps such records
+    comparable on their literal text instead, which is the conservative
+    behaviour: "Brewery" then matches only another "Brewery".
+    """
     from breweries.obdb_hygiene import normalize_name
 
-    return normalize_name(names).str.replace(_BRAND_SUFFIX_RE, "", regex=True)
+    normalized = normalize_name(names)
+    stripped = normalized.str.replace(_BRAND_SUFFIX_RE, "", regex=True)
+    return stripped.where(stripped != "", normalized)
 
 
 def classify_additions(additions: pd.DataFrame, obdb: pd.DataFrame) -> pd.DataFrame:
