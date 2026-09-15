@@ -2025,3 +2025,52 @@ CBP suppression is not random — small cells are withheld, so CBP is absent
 exactly where the model's uncertainty is largest. It validates the TOP of the
 distribution, which is where the documented bias lives, and is silent about the
 59%-zero tail. It is a corroboration exercise, not a second ground truth.
+
+### 18.16 TTB brewery data is not obtainable — a closed door, recorded so it is not reopened
+
+A reader on the original post objected that "if you really want to count
+breweries in a specific county, the TTB will be the ultimate arbiter there. No
+brewer's notice, no brewery." That is correct about authority — TTB is the
+federal regulator, a Brewer's Notice is the actual legal precondition for
+brewing, and a TTB list would have been a single national reference with one
+uniform definition, replacing 23 heterogeneous state registries of which only
+18 are trustworthy.
+
+**The data is not published, and cannot be.** TTB's List of Permittees covers
+basic permits, Puerto Rico basic permits, importers, wholesalers, spirits
+producers/bottlers and wine producers/blenders. It does not cover brewers.
+TTB's own statement:
+
+> "The Internal Revenue Code (Section 6103) protects taxpayer records from
+> public disclosure, so we do not publish lists of brewers, industrial alcohol
+> producers and users, or tobacco permit holders."
+
+The reason is structural rather than administrative. Wineries and distilleries
+hold FAA Act *basic permits*, which are disclosable. Brewers operate under a
+Brewer's Notice issued under the Internal Revenue Code, which makes the
+registration a protected taxpayer record. So the one federal source that would
+settle brewery counts nationally is the one category of alcohol producer whose
+registry is statutorily confidential — and no amount of engineering effort,
+FOIA request or budget changes that.
+
+CONSEQUENCES FOR THIS PROJECT
+-----------------------------
+- **The 23-state registry ceiling is permanent, not a matter of effort.**
+  Expanding calibration means adding more state registries one at a time, each
+  with its own definition and staleness; there is no national shortcut.
+- **County Business Patterns is therefore the only independent NATIONAL
+  reference available** (Section 18.15), and its limits — non-random
+  suppression of small counties, brewpub misclassification under NAICS 722511
+  — are the limits of national validation for this project, not a temporary
+  state of affairs.
+- **The closure/staleness bias stays unquantified.** OBDB carries no date or
+  status field, and TTB's dated, revocable permits would have been the natural
+  way to detect listings that are stale rather than missing. Every correction
+  this project applies pushes counts UP (capture rate below 1, the OSM union
+  adding records) while an opposite-direction error from closed-but-still-listed
+  breweries remains unmeasured. That asymmetry is now a known, and currently
+  unclosable, limitation rather than an oversight.
+
+This was proposed in this session as the highest-value remaining improvement.
+It was wrong: the option does not exist. Recorded here so the same
+recommendation is not made again.
