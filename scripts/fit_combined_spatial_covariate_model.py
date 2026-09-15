@@ -989,7 +989,15 @@ def main() -> None:
     print(f"Design matrix: {X.shape[0]} counties x {X.shape[1]} columns "
           f"({len(COVARIATE_COLS)} covariates + {X.shape[1] - len(COVARIATE_COLS)} state FE)")
 
-    y = merged["obdb_count"].to_numpy(dtype=float)
+    # MODELLING NUMERATOR. Uses the OBDB-union-OSM count where available:
+    # median 13.9% from registry truth versus OBDB's 34.6% (memo 18.12). The
+    # capture rates below were re-derived on this same numerator first; using
+    # union counts with OBDB-basis rates would double-correct (18.13).
+    count_col = "union_count" if "union_count" in merged.columns else "obdb_count"
+    if count_col == "obdb_count":
+        print("NOTE: no union_count column; fitting on OBDB-only counts.")
+    print(f"Modelling numerator: {count_col} ({int(merged[count_col].sum()):,} breweries)")
+    y = merged[count_col].to_numpy(dtype=float)
     log_exposure = np.log(merged["adults_21plus"].to_numpy(dtype=float))
     # Capture rate is bounded in (0, 1] upstream in capture_rate_model.py, so
     # the log is always finite; clipped anyway so a future upstream change

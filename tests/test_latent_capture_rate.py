@@ -15,7 +15,7 @@ import pytest
 
 from breweries import latent_capture_rate as lcr
 from breweries.capture_rate_model import BETWEEN_STATE_LOG_SD  # noqa: F401
-from breweries.capture_rate_model import CALIBRATED_STATE_CAPTURE_RATES
+from breweries.capture_rate_model import _active_rates
 
 
 class TestStateCapturePriors:
@@ -27,7 +27,7 @@ class TestStateCapturePriors:
         p = lcr.state_capture_priors(["GA"])
         assert p["source"].iloc[0] == "calibrated"
         assert 0 < p["sd_log_c"].iloc[0] < BETWEEN_STATE_LOG_SD
-        expected = min(CALIBRATED_STATE_CAPTURE_RATES["GA"], 1.0)
+        expected = min(_active_rates()["GA"], 1.0)  # active basis, not a fixed table
         assert np.isclose(np.exp(p["mu_log_c"].iloc[0]), expected)
 
     def test_uncalibrated_state_gets_much_wider_sd(self):

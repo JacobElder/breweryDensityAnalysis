@@ -35,6 +35,22 @@ def main() -> None:
               "data/processed/obdb_hygiene_report.csv")
     counts = geocoded.dropna(subset=["county_geoid"]).groupby("county_geoid").size().rename("obdb_count")
 
+    # UNION COUNT as the modelling numerator. Against the 18 state registries
+    # with trustworthy ground truth the union is a median 13.9% from truth
+    # versus OBDB's 34.6% (methods memo 18.12), and it ranks counties more like
+    # the independent CBP establishment count than OBDB does (18.15). The
+    # capture rates in capture_rate_model were re-derived on this same
+    # numerator FIRST -- see 18.13 for why that order is not optional.
+    union_path = Path("data/processed/us_county_union_counts.parquet")
+    union_counts = None
+    if union_path.exists():
+        u = pd.read_parquet(union_path)
+        union_counts = u.set_index("county_geoid")["union_count"].rename("union_count")
+        print(f"Union counts available for {len(union_counts):,} counties "
+              f"({int(union_counts.sum()):,} breweries)")
+    else:
+        print("NOTE: no union count file; falling back to OBDB-only counts.")
+
     acs_county = acs.load_national("county")
     acs_county["county_geoid"] = acs_county["state"].astype(str).str.zfill(2) + acs_county["county"].astype(str).str.zfill(3)
     acs_county["county_name"] = acs_county["NAME"].str.split(",").str[0]
@@ -43,6 +59,13 @@ def main() -> None:
     df = acs_county[["county_geoid", "county_name", "state_abbr", "total_population", "adults_21plus"]].copy()
     df = df.merge(counts, on="county_geoid", how="left")
     df["obdb_count"] = df["obdb_count"].fillna(0).astype(int)
+    if union_counts is not None:
+        df = df.merge(union_counts, on="county_geoid", how="left")
+        # Counties absent from the union file have no records in EITHER source,
+        # so their union count equals their (zero) OBDB count.
+        df["union_count"] = df["union_count"].fillna(df["obdb_count"]).astype(int)
+    else:
+        df["union_count"] = df["obdb_count"]
 
     covar = covariates.load_county_covariates()
     df = df.merge(
@@ -78,9 +101,14 @@ def main() -> None:
     # Apply the capture-rate correction model (see capture_rate_model.py):
     # calibrated states get their empirical rate, everyone else gets the pooled
     # rate + density adjustment with a wide uncertainty interval.
+    # Correct the UNION count, not the OBDB count. The rates in
+    # capture_rate_model are now union-basis (CAPTURE_BASIS = "union"), so
+    # applying them to an OBDB numerator would UNDER-correct -- the mirror of
+    # the double-correction that 18.13 warns about. Numerator and rate basis
+    # must match.
     log_density = np.log(df["density_per_sqmi"].clip(lower=0.1))
     corrections = [
-        apply_correction(row.obdb_count, row.state_abbr, ld)
+        apply_correction(row.union_count, row.state_abbr, ld)
         for row, ld in zip(df.itertuples(), log_density)
     ]
     df["capture_rate"] = [c["capture_rate"] for c in corrections]
@@ -88,6 +116,7 @@ def main() -> None:
     df["correction_source"] = [c["source"] for c in corrections]
 
     df["obdb_rate_per_100k_21plus"] = df["obdb_count"] / df["adults_21plus"] * 100_000
+    df["union_rate_per_100k_21plus"] = df["union_count"] / df["adults_21plus"] * 100_000
     df["corrected_rate_per_100k_21plus"] = df["obdb_corrected"] / df["adults_21plus"] * 100_000
 
     out_path = Path("data/processed/us_county_analysis.parquet")
@@ -99,6 +128,7 @@ def main() -> None:
           f"unemployment_rate={df['unemployment_rate'].isna().sum()}, "
           f"median_gross_rent={df['median_gross_rent'].isna().sum()}")
     print(f"Total OBDB breweries assigned to a county: {df['obdb_count'].sum()}")
+    print(f"Total UNION breweries (modelling numerator): {df['union_count'].sum()}")
 
 
 if __name__ == "__main__":

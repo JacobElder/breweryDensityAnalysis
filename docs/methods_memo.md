@@ -2182,3 +2182,80 @@ REMAINING SEQUENCE
 2. Repoint the model's `y` at `union_count`. No MCMC.
 3. `--production-only --no-checkpoint` refit. One NUTS run, now within budget.
 4. Regenerate outputs.
+
+### 18.19 Why five states' capture ratios exceed 1.0: an audit
+
+`capture_rate_model`'s docstring explains each over-1.0 state individually
+(Wyoming's self-distribution exemption, Missouri's excluded license category,
+Texas's brewpub subordinate authorizations, Illinois's cumulative export). Those
+are plausible per-state stories. This audits them against data.
+
+**1. The excess is DIFFUSE, not driven by a few bad counties.**
+
+| state | counties | OBDB > registry | raw ratio | excluding zero-licensee counties | largest county's share of excess |
+|---|---|---|---|---|---|
+| MO | 115 | 17 | 1.85 | 1.66 | 27% |
+| TX | 254 | 39 | 1.43 | 1.22 | 21% |
+| WY | 23 | 9 | 1.43 | 1.29 | 29% |
+| IL | 102 | 22 | 1.18 | 1.09 | 41% |
+| WV | 55 | 3 | 1.00 | 1.00 | 50% |
+
+No single county explains an over-1.0 ratio. These are state-wide patterns.
+
+**2. The dominant mechanism is geographic incompleteness of the registry.**
+In these states a large share of counties have ZERO licensees while OBDB lists
+breweries there — Texas's registry reports no licensees in 200 of 254 counties.
+Measuring the share of each state's OBDB breweries that sit in a
+registry-says-zero county:
+
+- over-1.0 states: **median 10%**
+- all other calibrated states: **median 0%**
+- Mann-Whitney one-sided **p = 0.025** (n = 5 vs 18)
+
+Dropping those counties removes roughly HALF the excess in every case
+(TX 1.43→1.22, MO 1.85→1.66, WY 1.43→1.29, IL 1.18→1.09). So these registries
+are not merely definitionally narrow — they have systematic geographic blank
+spots, consistent with a partial export rather than a complete register.
+
+**3. CBP arbitrates, and does not give one answer.** CBP is administrative and
+independent of both sources, so in counties where OBDB exceeds the registry it
+can say which is closer to truth:
+
+| | OBDB | registry | CBP | CBP sides with |
+|---|---|---|---|---|
+| TX | 156 | 81 | 121 | OBDB — the registry undercounts |
+| IL | 130 | 82 | 93 | the registry — OBDB over-lists |
+
+MO, WY and WV have no CBP coverage in their excess counties (small, rural,
+suppressed), which is the CBP limitation from 18.15 biting exactly where it
+was predicted to.
+
+**This contradicts the docstring's Illinois explanation.** The documented story
+blames ILCC's cumulative export for double-listing; CBP suggests the excess is
+at least partly OBDB's. Worth revisiting.
+
+**4. The brewpub explanation does not generalise.** If these registries missed
+breweries by excluding brewpubs, the over-1.0 states should be brewpub-heavy.
+They are not — brewpub share is 34.2% in over-1.0 states against 35.2%
+elsewhere, and micro share 61.2% against 60.4%. Essentially identical. The
+brewpub account may still hold for Texas specifically (its documented
+subordinate-authorization exclusion is concrete), but it is not the general
+mechanism.
+
+**5. Over-listing by duplication is ruled out where it could be checked.**
+Cook County IL, the largest single excess (77 OBDB vs 51 licensees), contains
+**76 distinct brands across 77 records** — one brand appears twice. Whatever
+drives Cook's excess, it is not the same brand counted repeatedly.
+
+CONCLUSION
+----------
+The over-1.0 ratios are mostly a REGISTRY problem, not an OBDB problem, and
+specifically a coverage problem rather than a definitional one: roughly half
+the excess is counties the registry simply does not cover. That supports the
+existing decision to treat these five as untrustworthy references rather than
+evidence of over-counting.
+
+But it is not uniform, and Illinois may be a genuine counter-example where OBDB
+over-lists. Treating all five identically — which
+`REGISTRY_STRUCTURALLY_UNDERCOUNTS` currently does — is a simplification, and
+IL is the state most likely to deserve different handling.

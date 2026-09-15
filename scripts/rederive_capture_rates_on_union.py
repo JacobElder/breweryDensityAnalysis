@@ -43,23 +43,43 @@ def main() -> None:
     union = pd.read_parquet(UNION_PATH)
     analysis = pd.read_parquet(ANALYSIS_PATH)[["county_geoid", "county_name", "state_abbr"]]
 
-    # The calibration frame is keyed by (county_name, state) with the "County"
-    # suffix already stripped; the union frame is keyed by GEOID. Bridge them
-    # through the analysis frame rather than fuzzy-matching names.
-    analysis["join_name"] = (analysis["county_name"]
-                             .str.replace(r"\s+(County|Parish|Borough|Census Area|Municipality|city)$",
-                                          "", regex=True))
+    # The calibration frame's county naming is INCONSISTENT ACROSS STATES:
+    # most states carry a bare name ("Alamance"), but Missouri and Virginia
+    # keep the suffix ("Adair County", "Alexandria city") and Connecticut's
+    # planning regions drop the "Planning Region" the analysis frame carries.
+    # Stripping only one side silently dropped CT, MO and VA entirely -- all
+    # three fell out of the union table and would have fallen back to the
+    # pooled rate despite having measured registries. Normalize BOTH sides.
+    suffix = r"\s+(County|Parish|Borough|Census Area|Municipality|Planning Region|city|City)$"
+
+    def norm(series: pd.Series) -> pd.Series:
+        out = series.astype(str)
+        for _ in range(2):  # "X Planning Region" -> "X"; "St. Louis city" -> "St. Louis"
+            out = out.str.replace(suffix, "", regex=True)
+        return out.str.strip().str.casefold()
+
+    analysis["join_name"] = norm(analysis["county_name"])
+    cal = cal.copy()
+    cal["join_name"] = norm(cal["county_name"])
     bridge = analysis.merge(union[["county_geoid", "union_count"]], on="county_geoid", how="left")
     bridge["union_count"] = bridge["union_count"].fillna(0)
 
     merged = cal.merge(
         bridge[["join_name", "state_abbr", "union_count"]],
-        left_on=["county_name", "state"], right_on=["join_name", "state_abbr"], how="left")
+        left_on=["join_name", "state"], right_on=["join_name", "state_abbr"], how="left")
     n_unmatched = int(merged["union_count"].isna().sum())
+    states_before = cal["state"].nunique()
     if n_unmatched:
         print(f"WARNING: {n_unmatched} of {len(cal)} calibration counties did not match a "
               "union count and are excluded from the re-derivation.")
     merged = merged.dropna(subset=["union_count"])
+    states_after = merged["state"].nunique()
+    if states_after < states_before:
+        lost = sorted(set(cal["state"]) - set(merged["state"]))
+        raise SystemExit(
+            f"ABORT: {states_before - states_after} state(s) lost entirely in the join "
+            f"({lost}). They would silently fall back to the pooled rate despite having "
+            "a measured registry. Fix the name normalization before proceeding.")
 
     g = merged.groupby("state").agg(
         obdb=("obdb_count", "sum"), union=("union_count", "sum"),

@@ -25,14 +25,21 @@ import pandas as pd
 import pytest
 
 from breweries.capture_rate_model import (
-    BETWEEN_STATE_LOG_SD,
-    CALIBRATED_STATE_CAPTURE_RATES,
-    LOG_DENSITY_COEF,
-    POOLED_CAPTURE_RATE,
+    _active_pooled,
+    _active_rates,
     _mean_log_density,
     apply_correction,
     correction_factor,
 )
+
+# The module can serve either capture basis (CAPTURE_BASIS: "union" adopted,
+# "obdb" for rollback). These tests pin the CONTRACT -- a calibrated state
+# returns its measured rate exactly; an uncalibrated one gets the pooled rate
+# with a density adjustment and a wide interval -- against whichever basis is
+# ACTIVE. Asserting against a hard-coded table instead went stale the moment
+# the basis changed, which is how 25 of them broke at once.
+CALIBRATED_STATE_CAPTURE_RATES = _active_rates()
+POOLED_CAPTURE_RATE, LOG_DENSITY_COEF, BETWEEN_STATE_LOG_SD = _active_pooled()
 
 
 # ---------------------------------------------------------------------------
@@ -271,3 +278,35 @@ class TestRealDataSmoke:
         )
         assert result["capture_rate"] <= 1.0
         assert result["capture_rate"] == pytest.approx(densest_row["capture_rate"])
+
+
+class TestCaptureBasisSwitch:
+    """The union basis is adopted; the OBDB basis must remain reachable for
+    comparison and rollback. A switch nothing verifies is a switch that quietly
+    stops working."""
+
+    def test_both_bases_are_available_and_differ(self):
+        from breweries import capture_rate_model as m
+
+        assert m.CAPTURE_BASIS in {"union", "obdb"}
+        assert set(m.UNION_STATE_CAPTURE_RATES) == set(m.CALIBRATED_STATE_CAPTURE_RATES)
+        # The union numerator is larger, so its rates must be >= the OBDB ones.
+        for st, union_rate in m.UNION_STATE_CAPTURE_RATES.items():
+            assert union_rate >= min(m.CALIBRATED_STATE_CAPTURE_RATES[st], 1.0) - 1e-9, st
+
+    def test_switching_basis_changes_the_served_rate(self, monkeypatch):
+        from breweries import capture_rate_model as m
+
+        monkeypatch.setattr(m, "CAPTURE_BASIS", "obdb")
+        assert m.correction_factor("GA")["capture_rate"] == pytest.approx(
+            min(m.CALIBRATED_STATE_CAPTURE_RATES["GA"], 1.0))
+        monkeypatch.setattr(m, "CAPTURE_BASIS", "union")
+        assert m.correction_factor("GA")["capture_rate"] == pytest.approx(
+            min(m.UNION_STATE_CAPTURE_RATES["GA"], 1.0))
+
+    def test_union_pooled_rate_exceeds_obdb_pooled_rate(self):
+        from breweries import capture_rate_model as m
+
+        assert m.UNION_POOLED_CAPTURE_RATE > m.POOLED_CAPTURE_RATE
+        # Adding OSM also makes coverage more uniform across states.
+        assert m.UNION_BETWEEN_STATE_LOG_SD < float(m.BETWEEN_STATE_LOG_SD)

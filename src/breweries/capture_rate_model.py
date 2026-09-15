@@ -132,6 +132,92 @@ LOG_DENSITY_COEF = 0.062  # WLS slope, per unit increase in log(people per sq mi
 BETWEEN_STATE_LOG_SD = np.sqrt(0.1062)  # ~0.326, REML group-variance estimate, 23 groups (unweighted MixedLM; see build script)
 
 
+# ---------------------------------------------------------------------------
+# UNION BASIS (adopted): capture rates measured against the OBDB-union-OSM
+# count instead of OBDB alone.
+# ---------------------------------------------------------------------------
+# WHY. Capture rate and brewery count are not independent -- every rate above
+# is union_count/licensee_count's OBDB-only sibling. Once the count changes,
+# leaving these rates in place applies the OLD, LARGER correction to an
+# ALREADY-LARGER numerator, double-correcting (methods memo 18.13). Georgia is
+# the clean case: an OBDB rate of 0.503 implies a ~2x upward correction, but
+# the union has already recovered most of that gap, and its union-basis rate is
+# 0.837.
+#
+# DIRECTION, easy to misread: these rates are HIGHER not because coverage
+# improved but because the numerator grew. The correction they drive is
+# therefore SMALLER. That is the point.
+#
+# Three states that were trustworthy under the OBDB basis now clip at 1.0
+# (CO raw 1.098, NJ 1.157, OR 1.074), joining the five whose registries already
+# undercounted structurally. They are within the range those references are
+# known to be wrong by -- see osm_union.py's acceptance test.
+UNION_STATE_CAPTURE_RATES = {
+    "CA": 0.709,  # raw 0.709; OBDB-basis was 0.601
+    "CO": 1.000,  # raw 1.098; OBDB-basis was 0.924
+    "CT": 0.897,  # raw 0.897; OBDB-basis was 0.579
+    "DC": 0.786,  # raw 0.786; OBDB-basis was 0.643
+    "FL": 0.945,  # raw 0.945; OBDB-basis was 0.766
+    "GA": 0.837,  # raw 0.837; OBDB-basis was 0.503
+    "IL": 1.000,  # raw 1.480; OBDB-basis was 1.000
+    "KY": 0.711,  # raw 0.711; OBDB-basis was 0.557
+    "MA": 0.898,  # raw 0.898; OBDB-basis was 0.828
+    "MI": 0.997,  # raw 0.997; OBDB-basis was 0.868
+    "MO": 1.000,  # raw 2.465; OBDB-basis was 1.000
+    "NC": 0.870,  # raw 0.870; OBDB-basis was 0.621
+    "NE": 0.864,  # raw 0.864; OBDB-basis was 0.848
+    "NJ": 1.000,  # raw 1.157; OBDB-basis was 0.748
+    "NY": 0.879,  # raw 0.879; OBDB-basis was 0.667
+    "OR": 1.000,  # raw 1.074; OBDB-basis was 0.937
+    "PA": 0.680,  # raw 0.680; OBDB-basis was 0.486
+    "TX": 1.000,  # raw 1.795; OBDB-basis was 1.000
+    "VA": 0.682,  # raw 0.682; OBDB-basis was 0.501
+    "WA": 0.944,  # raw 0.944; OBDB-basis was 0.833
+    "WI": 0.799,  # raw 0.799; OBDB-basis was 0.635
+    "WV": 1.000,  # raw 1.061; OBDB-basis was 1.000
+    "WY": 1.000,  # raw 1.536; OBDB-basis was 1.000
+}
+
+# Pooled fallback re-fit on the union numerator, same WLS spec
+# (log((count+0.5)/(licensee+0.5)) ~ log_density, weights=licensee_count) and
+# the same MixedLM between-state variance, over the identical 805-county,
+# 20-state universe.
+#
+#   basis    POOLED   LOG_DENSITY_COEF   between-state log sd
+#   OBDB      0.625        0.058                0.303
+#   union     0.759        0.069                0.249
+#
+# Re-running the OBDB basis through this same path gives 0.625 / 0.058 / 0.303
+# against the committed 0.610 / 0.062 / 0.326 above. The small gap is the
+# county universe -- the original fit's subset differs slightly from the
+# union-joinable one -- so the DELTA between the two rows is apples-to-apples
+# even though neither absolute exactly reproduces the older constant.
+#
+# Note the between-state sd FALLS (0.303 -> 0.249). Adding OSM does not just
+# raise coverage, it makes coverage more uniform across states, which is what
+# you would expect if OBDB's gaps were partly idiosyncratic to particular
+# states' volunteer communities.
+UNION_POOLED_CAPTURE_RATE = 0.759
+UNION_LOG_DENSITY_COEF = 0.069
+UNION_BETWEEN_STATE_LOG_SD = 0.249
+
+# Which basis the module serves. "union" is adopted; "obdb" restores the
+# previous behaviour exactly, for comparison or rollback.
+CAPTURE_BASIS = "union"
+
+
+def _active_rates() -> dict:
+    return (UNION_STATE_CAPTURE_RATES if CAPTURE_BASIS == "union"
+            else CALIBRATED_STATE_CAPTURE_RATES)
+
+
+def _active_pooled() -> tuple:
+    """(pooled rate, log-density coef, between-state log sd) for the active basis."""
+    if CAPTURE_BASIS == "union":
+        return UNION_POOLED_CAPTURE_RATE, UNION_LOG_DENSITY_COEF, UNION_BETWEEN_STATE_LOG_SD
+    return POOLED_CAPTURE_RATE, LOG_DENSITY_COEF, float(BETWEEN_STATE_LOG_SD)
+
+
 def correction_factor(state: str, log_density: float | None = None) -> dict:
     """Return a capture-rate estimate (and how much to trust it) for a state/county.
 
@@ -141,7 +227,9 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
     the interval bounds as precise; they exist to keep downstream users from
     treating a single national number as more certain than it is.
     """
-    if state in CALIBRATED_STATE_CAPTURE_RATES:
+    _rates = _active_rates()
+    _pooled, _dens_coef, _between_sd = _active_pooled()
+    if state in _rates:
         # min(..., 1.0): a capture rate is a fraction of a true population and
         # cannot exceed 1.0 by definition. Several states' raw values exceed 1.0
         # (see module docstring — the licensee reference itself over- or
@@ -149,15 +237,15 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
         # so apply_correction() never divides by >1 and inverts the correction
         # direction.
         return {
-            "capture_rate": min(CALIBRATED_STATE_CAPTURE_RATES[state], 1.0),
+            "capture_rate": min(_rates[state], 1.0),
             "source": "calibrated",
             "ci_low": None,
             "ci_high": None,
         }
 
-    log_rate = np.log(POOLED_CAPTURE_RATE)
+    log_rate = np.log(_pooled)
     if log_density is not None:
-        log_rate += LOG_DENSITY_COEF * (log_density - _mean_log_density())
+        log_rate += _dens_coef * (log_density - _mean_log_density())
 
     # A capture rate is a fraction of a true population — it cannot exceed 1.0 by
     # definition, but the log-linear density extrapolation isn't bounded above and
@@ -166,8 +254,8 @@ def correction_factor(state: str, log_density: float | None = None) -> dict:
     # dense in the 13 calibration states). Clip the point estimate and both CI
     # bounds at 1.0 rather than let "112% of breweries captured" through silently.
     rate = min(float(np.exp(log_rate)), 1.0)
-    ci_low = min(np.exp(log_rate - 1.96 * BETWEEN_STATE_LOG_SD), 1.0)
-    ci_high = min(np.exp(log_rate + 1.96 * BETWEEN_STATE_LOG_SD), 1.0)
+    ci_low = min(np.exp(log_rate - 1.96 * _between_sd), 1.0)
+    ci_high = min(np.exp(log_rate + 1.96 * _between_sd), 1.0)
     return {
         "capture_rate": rate,
         "source": "pooled_extrapolation",
