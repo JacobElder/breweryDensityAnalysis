@@ -2259,3 +2259,56 @@ But it is not uniform, and Illinois may be a genuine counter-example where OBDB
 over-lists. Treating all five identically — which
 `REGISTRY_STRUCTURALLY_UNDERCOUNTS` currently does — is a simplification, and
 IL is the state most likely to deserve different handling.
+
+### 18.20 Current state: steps 1-2 done, step 3 blocked, and a guard so the gap cannot ship
+
+The union adoption sequence from 18.13 is two-thirds complete.
+
+**Done and committed:**
+1. Capture rates re-derived on the union numerator and adopted
+   (`CAPTURE_BASIS = "union"`, 23 states). Median capture across the
+   trustworthy registries 0.655 -> 0.874; pooled fallback 0.625 -> 0.759;
+   between-state log sd 0.303 -> 0.249.
+2. `us_county_analysis.parquet` rebuilt: carries `union_count`, and the
+   capture correction is applied to that numerator rather than to OBDB.
+   Corrected national total **10,015 against the Brewers Association's
+   ~9,600** (the OBDB basis implied ~10,900).
+
+**Blocked:**
+3. Refitting the model on `union_count`. Nine OOM kills. The last two died
+   DURING sampling rather than in post-processing -- PyMC accumulates the trace
+   in memory as it samples, and with a browser holding ~1.7GB there was not
+   enough headroom even at 2,500 draws x 6 chains.
+
+THE RESULTING HAZARD, AND THE GUARD
+-----------------------------------
+This leaves the model output one step behind the analysis dataset, and the two
+are read by different renderers: `build_choropleth.py` reads the model
+rankings (OBDB basis, 6,626) while `build_corrected_rankings.py` reads
+`obdb_corrected` (union basis, 10,015). Regenerating both in this window would
+ship two maps built on different numerators with nothing on either saying so --
+exactly the silent divergence 18.13 warns about, arriving from the other
+direction.
+
+`build_choropleth.py` now refuses to run when the two disagree, printing both
+totals and the two ways out. A mixed-basis map cannot be produced by accident.
+
+TO FINISH
+---------
+Either complete step 3 on a machine with real headroom:
+
+    uv run python scripts/fit_combined_spatial_covariate_model.py --production-only
+    uv run python scripts/build_choropleth.py     # guard passes once bases agree
+    uv run python scripts/build_corrected_rankings.py
+
+or roll back by setting `CAPTURE_BASIS = "obdb"` in `capture_rate_model.py` and
+re-running `build_national_county_dataset.py`. Both ends of the chain then
+agree again, on the old basis.
+
+WHAT IS UNAFFECTED
+------------------
+The count map (`us_brewery_count_map.png`) reads `us_county_union_counts.parquet`
+directly and never touches the model, so it is correct and current. Since that
+is also the most accurate artifact this project produces -- median 13.9% from
+registry truth against the modelled rate's 33.7% (18.12) -- the blocked step
+affects the least consequential output.

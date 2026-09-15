@@ -150,7 +150,41 @@ BELOW_FLOOR_EDGE = "#b0b0b0"
 PAGE_COLOR = "#ffffff"
 
 
+def _assert_basis_consistent() -> None:
+    """Refuse to render if the model output is on a different brewery-count
+    basis than the analysis dataset.
+
+    The two can diverge by one step: the capture basis and the analysis
+    dataset were moved to the OBDB-union-OSM count, but the model refit that
+    would follow was blocked (nine OOM kills; see methods memo 18.20). In that
+    window `build_choropleth.py` reads OBDB-basis rankings while
+    `build_corrected_rankings.py` reads union-basis corrected counts, so
+    regenerating both would ship two maps built on different numerators with
+    nothing on either saying so. Better to stop than to publish that.
+    """
+    analysis_path = "data/processed/us_county_analysis.parquet"
+    if not os.path.exists(analysis_path) or not os.path.exists(RANKINGS_PATH):
+        return
+    a = pd.read_parquet(analysis_path)
+    r = pd.read_parquet(RANKINGS_PATH)
+    if "union_count" not in a.columns:
+        return
+    analysis_total = int(a["union_count"].sum())
+    model_total = int(r["obdb_count"].sum())
+    if analysis_total != model_total:
+        raise SystemExit(
+            "ABORT: brewery-count basis mismatch.\n"
+            f"  us_county_analysis.parquet (union basis) : {analysis_total:,}\n"
+            f"  model rankings (fitted basis)            : {model_total:,}\n"
+            "The model has not been refit since the numerator changed. Re-run\n"
+            "scripts/fit_combined_spatial_covariate_model.py --production-only\n"
+            "before regenerating maps, or set CAPTURE_BASIS='obdb' and rebuild\n"
+            "the analysis dataset to go back. See methods memo 18.13 and 18.20."
+        )
+
+
 def load_county_geodata() -> gpd.GeoDataFrame:
+    _assert_basis_consistent()
     # CARTOGRAPHIC BOUNDARY geometry, not TIGER/Line: TIGER carries legal
     # boundaries, which extend county polygons across open water, filling the
     # Great Lakes and Chesapeake Bay with solid county colour (Keweenaw County

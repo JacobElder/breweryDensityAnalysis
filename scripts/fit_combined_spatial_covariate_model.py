@@ -267,7 +267,17 @@ DRAWS, TUNE, CHAINS, TARGET_ACCEPT = 3000, 2500, 4, 0.95
 # not a bigger version of this one. Nothing published depends on it either way
 # -- mu_full, which every rate and map colour comes from, reached ess
 # 2,716-39,082 and rhat <=1.003 at the ORIGINAL settings.
-FINAL_DRAWS, FINAL_TUNE, FINAL_CHAINS, FINAL_TARGET_ACCEPT = 4000, 4000, 6, 0.97
+# Draws cut from 4,000 to 2,500 after an eighth OOM kill -- this one DURING
+# sampling rather than in post-processing, because PyMC accumulates the trace
+# in memory as it goes and system-wide pressure (a browser holding ~1.7GB) left
+# too little headroom. 15,000 total draws is ~0.7GB accumulated.
+#
+# The trade is deliberate and cheap: mu_full -- every rate, interval and map
+# colour -- reached ess 2,716-39,082 at 24,000 draws, so it has an order of
+# magnitude more precision than anything downstream needs. Only the 49 state
+# fixed effects lose, and they appear in no published output. Convergence on
+# those is worse here than the already-imperfect 4,000-draw run; see 18.18.
+FINAL_DRAWS, FINAL_TUNE, FINAL_CHAINS, FINAL_TARGET_ACCEPT = 2500, 3000, 6, 0.97
 # Sequential chains: see the `cores` note in fit_nb_model. Costs wall-clock
 # (~50min instead of ~20) and is what lets the SAMPLING stage fit in memory
 # here at all -- it held 0.59GB RSS versus three OOM kills with parallel
