@@ -77,6 +77,8 @@ extend far from its own dot in a dense region -- readers misattributed
 
 from __future__ import annotations
 
+import os
+
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -462,14 +464,27 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     outweigh Manhattan on visual weight alone. Symbol area (not radius) is
     proportional to count, which is the encoding people actually decode.
     """
-    gdf = gdf[gdf["obdb_count"].notna()].copy()
+    # Prefer the OBDB-union-OSM count where it exists. Against the 18 state
+    # registries with trustworthy ground truth, OBDB alone runs a median 34.6%
+    # below truth; the union lifts national coverage from 69% to 87% of the
+    # Brewers Association figure and takes the median calibrated-state capture
+    # rate from 0.654 to 0.871. See scripts/build_union_county_counts.py.
+    union_path = "data/processed/us_county_union_counts.parquet"
+    count_col, source_note = "obdb_count", "Open Brewery DB"
+    if os.path.exists(union_path):
+        u = pd.read_parquet(union_path)
+        gdf = gdf.merge(u[["county_geoid", "union_count"]],
+                         left_on="GEOID", right_on="county_geoid", how="left")
+        gdf["union_count"] = gdf["union_count"].fillna(gdf["obdb_count"])
+        count_col, source_note = "union_count", "Open Brewery DB union OpenStreetMap"
+    gdf = gdf[gdf[count_col].notna()].copy()
     gdf_conus = gdf.to_crs(epsg=5070)
     territory_fips = {"02", "15", "72", "78", "60", "66", "69"}
     conus = gdf_conus[~gdf_conus["STATEFP"].isin(territory_fips)]
     alaska = gdf[gdf["STATEFP"] == "02"].to_crs(epsg=3338)
     hawaii = gdf[gdf["STATEFP"] == "15"].to_crs(epsg=3563)
 
-    max_count = float(gdf["obdb_count"].max())
+    max_count = float(gdf[count_col].max())
     # Area-proportional: matplotlib's `s` IS area in points^2, so scale linearly.
     max_area = 420.0
 
@@ -477,10 +492,10 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
         sub.boundary.plot(ax=ax, color="#d8d8d8", linewidth=0.12, zorder=1)
         sub.dissolve(by="STATEFP").boundary.plot(
             ax=ax, color=STATE_EDGE_COLOR, linewidth=STATE_EDGE_WIDTH, zorder=2)
-        pts = sub[sub["obdb_count"] > 0]
+        pts = sub[sub[count_col] > 0]
         if len(pts):
             cent = pts.geometry.representative_point()
-            ax.scatter(cent.x, cent.y, s=pts["obdb_count"] / max_count * max_area,
+            ax.scatter(cent.x, cent.y, s=pts[count_col] / max_count * max_area,
                         facecolor="#c96a15", edgecolor="#4d2004", linewidth=0.25,
                         alpha=0.75, zorder=3)
         ax.set_axis_off()
@@ -506,12 +521,12 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
                                     edgecolor="#4d2004", linewidth=0.25, alpha=0.75))
         labels.append(f"{n:,}")
     ax.legend(handles, labels, loc="lower right", bbox_to_anchor=(0.99, 0.01),
-               title="Breweries in county\n(Open Brewery DB)", labelspacing=1.6,
+               title=f"Breweries in county\n({source_note})", labelspacing=1.6,
                borderpad=1.0, frameon=False, fontsize=9, title_fontsize=10, scatterpoints=1)
 
-    total = int(gdf["obdb_count"].sum())
+    total = int(gdf[count_col].sum())
     fig.text(0.5, 0.01,
-              f"Raw count of Open Brewery DB listings per county ({total:,} nationally), with no "
+              f"Raw count of {source_note} listings per county ({total:,} nationally), with no "
               "population denominator, no model and no capture-rate correction -- the companion to "
               "the per-capita map, which answers a different question. Symbol AREA is proportional "
               "to count. OBDB undercounts true brewery count by 7-54% depending on the state, so "
