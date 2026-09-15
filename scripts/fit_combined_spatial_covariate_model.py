@@ -948,7 +948,35 @@ def build_comparison(df_combined: pd.DataFrame) -> pd.DataFrame:
 # Main
 # ---------------------------------------------------------------------------
 
+def _parse_args():
+    """Run-shape flags, added because the blocker on a 16GB machine is not the
+    sampler -- sampling completed at 0.59GB RSS -- but everything around it.
+
+    Seven runs were OOM-killed. The last one sampled 36,000 draws successfully
+    and then died inside `idata.to_netcdf()` writing a 1.68GB trace with 2.8GB
+    free. These flags cut the two costs that are not the fit itself.
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--production-only", action="store_true",
+                    help="skip the four cross-validation fits and the model comparison; "
+                         "produce only the headline rankings. Cuts wall-clock roughly in "
+                         "half and avoids holding anything across four further fits.")
+    ap.add_argument("--no-checkpoint", action="store_true",
+                    help="do not write the ~1GB posterior trace to disk. The trace is only "
+                         "needed by fit_latent_capture_rate_model.py; skip it if you are "
+                         "not running that.")
+    ap.add_argument("--checkpoint-float64", action="store_true",
+                    help="store the checkpoint in float64. Default is float32, which halves "
+                         "the file and the serialization buffer; these are rates of order "
+                         "1e-2 to 1e2, where float32 carries ~7 significant digits, far more "
+                         "than the posterior's own width.")
+    return ap.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     print("=" * 70)
     print("Combined model: covariates + state FE + BYM2 spatial random effect")
     print("=" * 70)
@@ -984,8 +1012,18 @@ def main() -> None:
     # run exists to produce; everything after this point is comparatively
     # cheap post-processing that shouldn't be able to lose the fit if it errors.
     _checkpoint_path = "data/processed/_combined_model_idata_checkpoint.nc"
-    idata_final.to_netcdf(_checkpoint_path)
-    print(f"Checkpointed production-fit trace to {_checkpoint_path}")
+    if args.no_checkpoint:
+        print("Skipping trace checkpoint (--no-checkpoint).")
+    else:
+        to_write = idata_final
+        if not args.checkpoint_float64:
+            # Halves both the file and the serialization buffer, which is what
+            # the OOM kill happened inside.
+            to_write = idata_final.map(lambda x: x.astype("float32")
+                                       if x.dtype == "float64" else x)
+        to_write.to_netcdf(_checkpoint_path)
+        print(f"Checkpointed production-fit trace to {_checkpoint_path}"
+              f"{'' if args.checkpoint_float64 else ' (float32)'}")
 
     rho_summ = az.summary(idata_final, var_names=["rho", "sigma_bym"])
     # This arviz version's az.summary() reports an 89% equal-tailed interval
@@ -1056,10 +1094,14 @@ def main() -> None:
           .head(20).to_string(index=False))
 
     # --- Held-out validation: all four models ----------------------------
-    holdout_results = run_holdout_validation(merged, W, scale, X, prior_mu, prior_sigma,
-                                             is_state_col, log_capture_rate)
-    holdout_results.to_csv(OUT_HOLDOUT_COMPARISON, index=False)
-    print(f"\nWrote {OUT_HOLDOUT_COMPARISON}")
+    if args.production_only:
+        print("\nSkipping held-out model comparison (--production-only). "
+              f"{OUT_HOLDOUT_COMPARISON} left unchanged.")
+    else:
+        holdout_results = run_holdout_validation(merged, W, scale, X, prior_mu, prior_sigma,
+                                                 is_state_col, log_capture_rate)
+        holdout_results.to_csv(OUT_HOLDOUT_COMPARISON, index=False)
+        print(f"\nWrote {OUT_HOLDOUT_COMPARISON}")
 
     # --- Write full output parquet (CONUS + non-CONUS fallback) ----------
     model_a_full = pd.read_parquet(MODEL_A_PATH)

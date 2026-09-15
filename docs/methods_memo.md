@@ -2121,3 +2121,64 @@ here, because capture rates and brewery counts are not independent (Section
 still fitted on OBDB-only counts. The correct sequence is to re-derive capture
 rates on the union numerator and refit in one pass, not to change one end of
 the chain mid-stream.
+
+### 18.18 Unblocking the union refit: what was actually blocked, and what wasn't
+
+The union refit had been described as "blocked on hardware". That was too
+coarse. Breaking it into pieces shows most of it was never blocked.
+
+**Sampling is not the problem.** The last OOM-killed run SAMPLED 36,000 draws
+successfully at 0.59GB RSS in 2,997s with sequential chains, then died inside
+`idata.to_netcdf()` writing a 1.68GB trace with 2.8GB free. The blocker is the
+machinery around the fit, not the fit.
+
+Three changes cut that, all in `fit_combined_spatial_covariate_model.py`:
+
+- `--checkpoint-float32` is now the DEFAULT. These are rates of order 1e-2 to
+  1e2 and float32 carries ~7 significant digits, far more than the posterior's
+  own width. Halves both the file and the serialization buffer the kill
+  happened inside.
+- `--no-checkpoint` skips the trace entirely. It is only consumed by
+  `fit_latent_capture_rate_model.py`.
+- `--production-only` skips the four cross-validation fits, roughly halving
+  wall-clock and avoiding holding anything across four further fits. The model
+  comparison those fits produce is separately known to be measuring OBDB
+  prediction rather than accuracy (18.12), so it is not what a union refit
+  needs.
+
+Resulting budget at 24,000 draws: trace 0.56GB float32, peak with the write
+buffer ~1.1GB, against 3.1GB free. That fits on the machine that killed seven
+runs.
+
+**Step 1 was never blocked at all.** Re-deriving capture rates on the union
+numerator is ratio arithmetic, not inference.
+`scripts/rederive_capture_rates_on_union.py` now does it:
+
+| | median capture (16 trustworthy registries) |
+|---|---|
+| OBDB numerator (current) | 0.707 |
+| union numerator (proposed) | **0.874** |
+
+Three trustworthy registries clip at 1.0 under the union (CO 1.098, NJ 1.157,
+OR 1.074), joining the five already known to undercount structurally. That is
+the same overshoot documented in `osm_union.py` and is within the range those
+references are already wrong by.
+
+The direction matters and is easy to misread: a capture rate RISES here because
+the numerator grew, not because coverage improved. The correction these rates
+drive therefore SHRINKS. That is exactly why the order in 18.13 is not
+optional — leaving the old rates in place while switching the count applies the
+old, larger correction to an already-larger count.
+
+**Not adopted automatically.** `capture_rate_model.py`'s constants carry
+per-state documentation of each registry's quirks; overwriting them
+programmatically would discard that. The proposed table is written to
+`data/processed/union_capture_rates_proposed.csv` for review.
+
+REMAINING SEQUENCE
+------------------
+1. Review the proposed table; update `CALIBRATED_STATE_CAPTURE_RATES` and
+   re-fit `POOLED_CAPTURE_RATE` on the union numerator. No MCMC.
+2. Repoint the model's `y` at `union_count`. No MCMC.
+3. `--production-only --no-checkpoint` refit. One NUTS run, now within budget.
+4. Regenerate outputs.
