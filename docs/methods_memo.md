@@ -1974,3 +1974,54 @@ separate open question.
 Effect on the published output: the calibrated stratum's median true-rate
 interval widens from 1.506 to 1.552 (log scale), i.e. small-registry states
 stop being drawn as more confident than their sample size supports.
+
+### 18.15 Systematic CBP validation: an independent national corroboration
+
+County Business Patterns (NAICS 312120) was previously used for two anecdotes.
+It is now checked systematically, because it is the only INDEPENDENT NATIONAL
+reference this project has: 497 counties with a non-suppressed establishment
+count, covering 66% of US adults 21+.
+
+Its value is that its bias is ORTHOGONAL to OBDB's. OBDB and OSM are both
+crowdsourced and miss the same kinds of brewery, which is why capture-recapture
+between them failed so badly (Section 5.3; the three-source attempt
+overestimated Colorado by 10x). CBP fails a different way — brewpubs filed
+under NAICS 722511 instead of 312120 — so agreement is meaningful evidence and
+disagreement is a targeted signal.
+
+| source | Spearman ρ vs CBP | median ratio vs CBP |
+|---|---|---|
+| OBDB only | 0.8165 | 1.077 |
+| **OBDB ∪ OSM union** | **0.8480** | 1.350 |
+| model-implied count | 0.7960 | 0.978 |
+
+**The union ranks counties more like CBP than OBDB alone does, and the model
+ranks them least like CBP.** That is independent corroboration of 18.12, from a
+national source rather than 18 registry states, and it was arrived at a
+completely different way. The ordering is the same in both tests: union first,
+raw OBDB second, model last.
+
+The median ratio above 1.0 is expected and is not evidence of over-counting —
+CBP misses brewpubs by construction, so a crowdsourced source legitimately
+lists more. Rank correlation is the informative column.
+
+**Divergence >3x: 16 of 497 counties (3.2%).** The actionable direction is the
+four where CBP exceeds our union, since CBP is administrative and those are
+counties both crowdsourced sources missed:
+
+| county | OBDB | union | CBP |
+|---|---|---|---|
+| Beaufort County, NC | 0 | 0 | 3 |
+| Parker County, TX | 0 | 4 | 4 |
+| Fayette County, GA | 1 | 1 | 4 |
+| Walton County, FL | 2 | 2 | 7 |
+
+Beaufort NC and Parker TX are the Salem County NJ pattern again: a county where
+we report zero and an administrative source reports several.
+
+WHAT THIS CANNOT DO
+-------------------
+CBP suppression is not random — small cells are withheld, so CBP is absent
+exactly where the model's uncertainty is largest. It validates the TOP of the
+distribution, which is where the documented bias lives, and is silent about the
+59%-zero tail. It is a corroboration exercise, not a second ground truth.
