@@ -72,8 +72,17 @@ class TestCalibratedLogSds:
         sds = lcr.calibrated_log_sds()
         if not sds:
             pytest.skip("calibration file not present")
-        for st in ("TX", "MO", "WY"):
+        for st in ("TX", "MO", "WY", "IL", "WV"):
             assert sds[st] == pytest.approx(lcr.CLIPPED_REGISTRY_LOG_SD)
+
+    def test_west_virginia_is_not_the_most_certain_state(self):
+        """WV's ratio is exactly 1.000, so an `obdb_count > licensee_count`
+        test misses it and it was receiving the tightest interval in the table
+        off a 33-licensee, ~13-month-stale PDF snapshot."""
+        sds = lcr.calibrated_log_sds()
+        if not sds:
+            pytest.skip("calibration file not present")
+        assert sds["WV"] > sds["CA"], "WV (n=33, stale PDF) must not beat CA (n=1,270)"
 
     def test_missing_calibration_file_falls_back_gracefully(self):
         assert lcr.calibrated_log_sds(path="/nonexistent/path.parquet") == {}

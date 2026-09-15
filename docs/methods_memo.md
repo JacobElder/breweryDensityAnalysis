@@ -1948,11 +1948,28 @@ A floor of 0.03 applies, because binomial sampling is not the only error in a
 capture rate -- record linkage, registry currency and license category all
 contribute, so California's n=1,270 should not read as 0.3% certain.
 
-The five states whose measured ratio EXCEEDS 1.0 (MO 1.85, TX 1.43, WY 1.43,
-IL 1.18, WV 1.00) are deliberately NOT given a binomial interval. Their
-reference is wrong, not their sample, so a tight sampling interval there would
-claim near-certainty about precisely the states whose ground truth is least
-trustworthy. They take the pooled width (0.326) instead.
+Five states are deliberately NOT given a binomial interval: WY, MO, TX, IL and
+WV, each documented in `capture_rate_model`'s docstring as a registry that
+structurally UNDERCOUNTS (self-distribution exemptions, excluded license
+categories, cumulative exports, a stale PDF). Their reference is wrong, not
+their sample, so a tight sampling interval would claim near-certainty about the
+least trustworthy ground truth in the project. They take the pooled width
+(0.326).
+
+That set is named EXPLICITLY rather than inferred from
+`obdb_count > licensee_count`, because the inference is off by one state: West
+Virginia's ratio is exactly 1.000, so `k > n` is False and WV was receiving the
+tightest interval in the whole table (floored to 0.030) off a 33-licensee,
+~13-month-stale PDF snapshot -- drawn as better determined than California's
+1,270-licensee sample. `k > n` is retained as a backstop so a future refresh
+that pushes another state over 1.0 is caught before anyone updates the list.
+
+California and Virginia are deliberately NOT in that set. Their registries
+count licences or premises rather than businesses, which makes the reference
+too LARGE, not too small -- deflating their measured capture rate rather than
+inflating it. A binomial interval on the observed ratio is still meaningful
+there, though it does imply both are probably over-corrected, which is a
+separate open question.
 
 Effect on the published output: the calibrated stratum's median true-rate
 interval widens from 1.506 to 1.552 (log scale), i.e. small-registry states

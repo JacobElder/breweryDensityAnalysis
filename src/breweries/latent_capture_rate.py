@@ -109,13 +109,36 @@ CALIBRATED_LOG_SD = 0.10
 # as 0.3% certain.
 MIN_CALIBRATED_LOG_SD = 0.03
 
-# Log-sd used for a state whose measured ratio EXCEEDS 1.0. Those five states
-# (MO 1.85, TX 1.43, WY 1.43, IL 1.18, WV 1.00) have registries documented as
-# incomplete, so their binomial interval is not merely tight but meaningless:
-# the reference, not the sample, is what is wrong. Treating them with a narrow
-# sampling interval would claim near-certainty about the states whose ground
-# truth is least trustworthy. They get the pooled width instead.
+# Log-sd for a state whose REGISTRY structurally undercounts the brewery
+# population, so its capture ratio sits at or above 1.0. Their binomial
+# interval is not merely tight but meaningless: the reference, not the sample,
+# is what is wrong, and no amount of licensee data bounds the truth from
+# below. They take the pooled width instead of a sampling interval.
 CLIPPED_REGISTRY_LOG_SD = float(BETWEEN_STATE_LOG_SD)
+
+# Named explicitly rather than inferred from `obdb_count > licensee_count`.
+# That inference is off by one state: West Virginia's ratio is exactly 1.000,
+# so `k > n` is False and WV was receiving a tight binomial interval floored to
+# 0.030 -- the single most confident value in the table -- despite its registry
+# being a ~13-month-stale PDF snapshot rather than a live query. It was being
+# drawn as better determined than California's 1,270-licensee sample.
+#
+# Each of these is documented in capture_rate_model's module docstring as a
+# reference that measures a different population than "OBDB-listed craft
+# breweries", in the direction that makes the registry too SMALL:
+#   WY  brewers self-distributing need no wholesaler license
+#   MO  the license category excludes the state's largest breweries
+#   TX  brewpub subordinate authorizations are excluded
+#   IL  cumulative export, active status only inferable from expiry
+#   WV  dated PDF snapshot, stale in either direction
+#
+# NOT included: CA and VA. Their registries are documented as counting
+# LICENSES/premises rather than businesses, which makes the reference too
+# LARGE, not too small. That deflates their measured capture rate rather than
+# inflating it, so a binomial interval on the observed ratio is still
+# meaningful -- but it also means both are probably over-corrected, which is a
+# separate open question this constant is not the place to fix.
+REGISTRY_STRUCTURALLY_UNDERCOUNTS = frozenset({"WY", "MO", "TX", "IL", "WV"})
 
 CALIBRATION_PATH = "data/processed/pooled_calibration_with_density.parquet"
 
@@ -145,7 +168,11 @@ def calibrated_log_sds(path: str = CALIBRATION_PATH) -> dict[str, float]:
         k = float(row["obdb_count"])
         if n <= 0:
             continue
-        if k > n:  # registry known incomplete -- see CLIPPED_REGISTRY_LOG_SD
+        if state in REGISTRY_STRUCTURALLY_UNDERCOUNTS or k > n:
+            # Explicit list first: `k > n` alone misses WV, whose ratio is
+            # exactly 1.000. The `or k > n` remains as a backstop so a future
+            # data refresh that pushes some other state above 1.0 is caught
+            # even before anyone updates the list.
             out[state] = CLIPPED_REGISTRY_LOG_SD
             continue
         lo, hi = proportion_confint(k, n, method="jeffreys")
