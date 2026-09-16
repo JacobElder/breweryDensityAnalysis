@@ -165,17 +165,23 @@ def _assert_basis_consistent() -> None:
     analysis_path = "data/processed/us_county_analysis.parquet"
     if not os.path.exists(analysis_path) or not os.path.exists(RANKINGS_PATH):
         return
+    from breweries.capture_rate_model import CAPTURE_BASIS
+
     a = pd.read_parquet(analysis_path)
     r = pd.read_parquet(RANKINGS_PATH)
-    if "union_count" not in a.columns:
+    # Compare the ACTIVE numerator, the one CAPTURE_BASIS selects -- not
+    # union_count unconditionally. Comparing the wrong column made this guard
+    # fire on a state that was in fact consistent.
+    numerator_col = "union_count" if CAPTURE_BASIS == "union" else "obdb_count"
+    if numerator_col not in a.columns:
         return
-    analysis_total = int(a["union_count"].sum())
+    analysis_total = int(a[numerator_col].sum())
     model_total = int(r["obdb_count"].sum())
     if analysis_total != model_total:
         raise SystemExit(
             "ABORT: brewery-count basis mismatch.\n"
-            f"  us_county_analysis.parquet (union basis) : {analysis_total:,}\n"
-            f"  model rankings (fitted basis)            : {model_total:,}\n"
+            f"  us_county_analysis.parquet ({numerator_col}) : {analysis_total:,}\n"
+            f"  model rankings (as fitted)                 : {model_total:,}\n"
             "The model has not been refit since the numerator changed. Re-run\n"
             "scripts/fit_combined_spatial_covariate_model.py --production-only\n"
             "before regenerating maps, or set CAPTURE_BASIS='obdb' and rebuild\n"

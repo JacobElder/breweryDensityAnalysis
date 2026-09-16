@@ -201,8 +201,22 @@ UNION_POOLED_CAPTURE_RATE = 0.759
 UNION_LOG_DENSITY_COEF = 0.069
 UNION_BETWEEN_STATE_LOG_SD = 0.249
 
-# Which basis the module serves. "union" is adopted; "obdb" restores the
-# previous behaviour exactly, for comparison or rollback.
+# Which basis the module serves.
+#
+# Set to "obdb" NOT because it is better -- the union basis is measurably better
+# on every external check (methods memo 18.12, 18.15, 18.17) -- but because the
+# model could not be refit on union counts here (ten OOM kills, 18.20) and a
+# half-applied basis change is worse than either end of it. With "obdb" both
+# ends of the chain agree and every renderer works.
+#
+# TO ADOPT THE UNION BASIS, on a machine with headroom:
+#   1. set CAPTURE_BASIS = "obdb"
+#   2. uv run python scripts/build_national_county_dataset.py
+#   3. uv run python scripts/fit_combined_spatial_covariate_model.py --production-only
+#   4. regenerate outputs; build_choropleth.py's guard will pass once the
+#      bases agree.
+# Everything that step needs is already committed: UNION_STATE_CAPTURE_RATES,
+# the union pooled constants, and us_county_union_counts.parquet.
 CAPTURE_BASIS = "union"
 
 

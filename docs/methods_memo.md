@@ -2260,7 +2260,7 @@ over-lists. Treating all five identically — which
 `REGISTRY_STRUCTURALLY_UNDERCOUNTS` currently does — is a simplification, and
 IL is the state most likely to deserve different handling.
 
-### 18.20 Current state: steps 1-2 done, step 3 blocked, and a guard so the gap cannot ship
+### 18.20 Union basis: implemented, validated, and DEFERRED (not abandoned)
 
 The union adoption sequence from 18.13 is two-thirds complete.
 
@@ -2312,3 +2312,56 @@ directly and never touches the model, so it is correct and current. Since that
 is also the most accurate artifact this project produces -- median 13.9% from
 registry truth against the modelled rate's 33.7% (18.12) -- the blocked step
 affects the least consequential output.
+
+
+### 18.21 Final disposition of the union basis on this machine
+
+Ten OOM kills. The last attempt used 2,000 draws x 3 chains -- 6,000 draws,
+~0.28GB of accumulated trace -- and was still killed. The fit itself sampled at
+0.30GB RSS. The binding constraint was never this model: it is system-wide
+pressure, with a browser holding 7.3GB of a 16GB machine.
+
+DECISION: `CAPTURE_BASIS` is set back to `"obdb"`.
+
+Not because it is better -- it is measurably worse on every external check
+(18.12, 18.15, 18.17) -- but because a half-applied basis change is worse than
+either end of it. With `"obdb"`, both ends of the chain agree, every renderer
+works, and the maps regenerate.
+
+WHAT CHANGED STRUCTURALLY, AND WHY IT MATTERS MORE THAN THE SETTING
+-------------------------------------------------------------------
+The numerator is no longer chosen independently of the capture basis. Both
+`build_national_county_dataset.py` and `fit_combined_spatial_covariate_model.py`
+now DERIVE the count column from `CAPTURE_BASIS`, and `build_choropleth.py`
+refuses to render when the analysis dataset and the fitted model disagree on
+it. The pairing that this whole exercise turned on -- numerator and rate basis
+must match, or you double-correct in one direction and under-correct in the
+other -- is now enforced by the code rather than by whoever remembers 18.13.
+
+(The guard's first version compared `union_count` unconditionally rather than
+the ACTIVE numerator, so it fired on a state that was in fact consistent. Fixed,
+and verified to pass when the bases agree and fire when they do not.)
+
+TO ADOPT THE UNION BASIS ELSEWHERE
+----------------------------------
+Everything needed is committed -- `UNION_STATE_CAPTURE_RATES` (23 states), the
+union pooled constants, `us_county_union_counts.parquet`:
+
+    # in src/breweries/capture_rate_model.py
+    CAPTURE_BASIS = "union"
+
+    uv run python scripts/build_national_county_dataset.py
+    uv run python scripts/fit_combined_spatial_covariate_model.py --production-only
+    uv run python scripts/build_choropleth.py
+    uv run python scripts/build_corrected_rankings.py
+
+Expected: corrected national total ~10,015 against the Brewers Association's
+~9,600 (the OBDB basis implies ~10,900), and a headline rate map built on a
+numerator that is a median 13.9% from registry truth rather than 34.6%.
+
+WHAT IS ALREADY LIVE REGARDLESS
+-------------------------------
+The count map reads `us_county_union_counts.parquet` directly and never touches
+the model or the capture basis, so it ships the union's 8,369 breweries today.
+Since that is also the most accurate artifact this project produces, the
+deferred step affects the least consequential output.

@@ -277,7 +277,12 @@ DRAWS, TUNE, CHAINS, TARGET_ACCEPT = 3000, 2500, 4, 0.95
 # magnitude more precision than anything downstream needs. Only the 49 state
 # fixed effects lose, and they appear in no published output. Convergence on
 # those is worse here than the already-imperfect 4,000-draw run; see 18.18.
-FINAL_DRAWS, FINAL_TUNE, FINAL_CHAINS, FINAL_TARGET_ACCEPT = 2500, 3000, 6, 0.97
+# Settings for a machine with real headroom. Ten OOM kills on the development
+# box established that the binding constraint was never this fit -- it sampled
+# at 0.30GB RSS -- but system-wide pressure (a browser holding 7.3GB of 16GB).
+# Even 2,000 draws x 3 chains (0.28GB accumulated) was killed. Lower these only
+# if you hit the same wall; see methods memo 18.20.
+FINAL_DRAWS, FINAL_TUNE, FINAL_CHAINS, FINAL_TARGET_ACCEPT = 4000, 4000, 6, 0.97
 # Sequential chains: see the `cores` note in fit_nb_model. Costs wall-clock
 # (~50min instead of ~20) and is what lets the SAMPLING stage fit in memory
 # here at all -- it held 0.59GB RSS versus three OOM kills with parallel
@@ -1003,9 +1008,13 @@ def main() -> None:
     # median 13.9% from registry truth versus OBDB's 34.6% (memo 18.12). The
     # capture rates below were re-derived on this same numerator first; using
     # union counts with OBDB-basis rates would double-correct (18.13).
-    count_col = "union_count" if "union_count" in merged.columns else "obdb_count"
-    if count_col == "obdb_count":
-        print("NOTE: no union_count column; fitting on OBDB-only counts.")
+    from breweries.capture_rate_model import CAPTURE_BASIS
+
+    count_col = "union_count" if CAPTURE_BASIS == "union" else "obdb_count"
+    if count_col not in merged.columns:
+        raise SystemExit(f"ABORT: capture basis '{CAPTURE_BASIS}' needs column "
+                         f"'{count_col}', which is absent. Re-run "
+                         "build_national_county_dataset.py.")
     print(f"Modelling numerator: {count_col} ({int(merged[count_col].sum()):,} breweries)")
     y = merged[count_col].to_numpy(dtype=float)
     log_exposure = np.log(merged["adults_21plus"].to_numpy(dtype=float))

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from breweries.capture_rate_model import apply_correction
+from breweries.capture_rate_model import CAPTURE_BASIS, apply_correction
 from breweries.sources import acs, covariates
 from breweries.state_fips import STATE_FIPS_ALL
 
@@ -101,14 +101,16 @@ def main() -> None:
     # Apply the capture-rate correction model (see capture_rate_model.py):
     # calibrated states get their empirical rate, everyone else gets the pooled
     # rate + density adjustment with a wide uncertainty interval.
-    # Correct the UNION count, not the OBDB count. The rates in
-    # capture_rate_model are now union-basis (CAPTURE_BASIS = "union"), so
-    # applying them to an OBDB numerator would UNDER-correct -- the mirror of
-    # the double-correction that 18.13 warns about. Numerator and rate basis
-    # must match.
+    # NUMERATOR IS DERIVED FROM THE CAPTURE BASIS, never chosen separately.
+    # Mismatching them breaks in both directions: union counts with OBDB-basis
+    # rates double-corrects (18.13), OBDB counts with union-basis rates
+    # under-corrects. Tying them here makes the pairing structural rather than
+    # a thing someone has to remember.
+    numerator_col = "union_count" if CAPTURE_BASIS == "union" else "obdb_count"
+    print(f"Capture basis '{CAPTURE_BASIS}' -> correcting {numerator_col}")
     log_density = np.log(df["density_per_sqmi"].clip(lower=0.1))
     corrections = [
-        apply_correction(row.union_count, row.state_abbr, ld)
+        apply_correction(getattr(row, numerator_col), row.state_abbr, ld)
         for row, ld in zip(df.itertuples(), log_density)
     ]
     df["capture_rate"] = [c["capture_rate"] for c in corrections]
