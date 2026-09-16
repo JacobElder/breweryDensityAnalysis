@@ -12,7 +12,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
+
+# Halo drawn behind label text so it stays legible over dark choropleth fills.
+# 2.2pt is enough to separate the glyphs from the darkest bins without the
+# labels reading as stickers. The marker dot gets a thin version of the same
+# treatment -- thin deliberately: at 0.6pt on a 3.5pt dot the white ring ate
+# most of the black and the markers read as hollow circles.
+HALO_COLOR = "white"
+HALO_WIDTH = 2.2
 
 # Offsets tried in priority order: near, readable positions first, then
 # farther/less-preferred ones. (dx, dy) in points, plus text alignment.
@@ -53,7 +62,7 @@ def place_labels(
     candidates: list[LabelCandidate],
     max_labels: int = 20,
     fontsize: float = 7.5,
-    marker_size: float = 3.5,
+    marker_size: float = 4.0,
     reserved_boxes: list | None = None,
 ) -> int:
     """Place up to max_labels candidates, highest-priority first, skipping any
@@ -81,7 +90,8 @@ def place_labels(
         accepted_marker = None
         for dx, dy, ha, va in _OFFSET_CANDIDATES:
             marker = ax.plot(cand.x, cand.y, marker="o", markersize=marker_size,
-                              color="black", zorder=5, linestyle="none")[0]
+                              color="black", zorder=5, linestyle="none",
+                              markeredgecolor=HALO_COLOR, markeredgewidth=0.4)[0]
             # Leader line from the dot to the text. The offsets here are small
             # (<=18pt), but a long label's TEXT still extends far from its own
             # dot -- "Hampshire County, MA" is ~150px wide at this size, which
@@ -98,6 +108,15 @@ def place_labels(
                              "shrinkA": 0.0, "shrinkB": float(marker_size),
                              "connectionstyle": "arc3,rad=0.0"},
             )
+            # White halo behind the glyphs. These labels sit on whatever the
+            # choropleth put underneath them, and the darkest bins are dark
+            # enough that bold black on top is genuinely hard to read -- the
+            # top two classes of the count map in particular. A stroke is the
+            # standard cartographic answer and is preferable to switching the
+            # text colour by underlying value, which needs the fill sampled per
+            # label and produces a map with two different label styles on it.
+            text.set_path_effects([
+                path_effects.withStroke(linewidth=HALO_WIDTH, foreground=HALO_COLOR)])
             fig.canvas.draw()
             bbox = text.get_window_extent(renderer=renderer)
 

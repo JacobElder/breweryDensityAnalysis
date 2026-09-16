@@ -556,7 +556,11 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     ax = fig.add_axes((0.02, 0.08, 0.96, 0.86))
     ax.set_facecolor(PAGE_COLOR)
     draw(ax, conus)
-    ax.set_title("Breweries per US County (raw observed count, no model)",
+    # Titles say what the map SHOWS, not how it was built. "(raw count, no
+    # model)" meant something to whoever wrote it and nothing to a general
+    # reader, who has no reason to know the project has a modelled alternative.
+    # The methodology belongs in the caption, where it already is.
+    ax.set_title("Breweries per US County",
                   fontsize=17, fontweight="bold", pad=12)
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
@@ -658,7 +662,11 @@ def build_count_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     ax = fig.add_axes((0.02, 0.08, 0.96, 0.86))
     ax.set_facecolor(PAGE_COLOR)
     draw(ax, conus)
-    ax.set_title("Breweries per US County (raw count, no model)",
+    # Titles say what the map SHOWS, not how it was built. "(raw count, no
+    # model)" meant something to whoever wrote it and nothing to a general
+    # reader, who has no reason to know the project has a modelled alternative.
+    # The methodology belongs in the caption, where it already is.
+    ax.set_title("Breweries per US County",
                   fontsize=17, fontweight="bold", pad=12)
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
@@ -782,7 +790,7 @@ def build_rate_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     ax = fig.add_axes((0.02, 0.08, 0.96, 0.86))
     ax.set_facecolor(PAGE_COLOR)
     draw(ax, conus)
-    ax.set_title("Breweries per 100,000 Adults 21+, by US County (raw, no model)",
+    ax.set_title("Breweries per 100,000 Adults 21+, by US County",
                   fontsize=17, fontweight="bold", pad=12)
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
