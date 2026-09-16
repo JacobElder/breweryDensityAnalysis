@@ -359,17 +359,15 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
     draw(ax, conus)
 
     title = title_prefix
-    subtitle = ("Combined model: covariates + state fixed effects + a BYM2 spatial random effect, "
-                "per 100,000 adults 21+")
+    subtitle = "Model-estimated breweries per 100,000 adults aged 21 and over"
     if floor is not None:
         title += " (population-floored)"
-        subtitle = (f"Counties under {floor:,} adults 21+ shown hatched, not coloured; covariate "
-                    "and spatial smoothing reduce but don't eliminate small-county noise")
+        subtitle = (f"Counties with fewer than {floor:,} adults aged 21+ are hatched rather than "
+                    "coloured, because their rates are too uncertain to map")
     elif encode_uncertainty:
         title += " (faded where uncertain)"
-        subtitle = ("Combined model, per 100,000 adults 21+. Colour fades toward white as the "
-                    "model's own 95% interval widens, so counties the data can't pin down "
-                    "wash out rather than being hidden or shown at full confidence")
+        subtitle = ("Model-estimated breweries per 100,000 adults aged 21 and over. Counties are "
+                    "shown fainter where the estimate is more uncertain")
     ax.set_title(title, fontsize=17, fontweight="bold", pad=12)
 
     # AK/HI carry Model A's flat-mean shrunken rate, NOT the BYM2 model the
@@ -381,7 +379,7 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
 
     ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
     draw(ax_ak, alaska)
-    ax_ak.set_title("AK" + (" — no spatial model*" if ak_fallback else ""), fontsize=9)
+    ax_ak.set_title("AK" + ("*" if ak_fallback else ""), fontsize=9)
 
     ax_hi = fig.add_axes((0.20, 0.05, 0.10, 0.14))
     draw(ax_hi, hawaii)
@@ -436,19 +434,24 @@ def build_map(gdf: gpd.GeoDataFrame, out_path: str, floor: int | None,
                            reserved_boxes=reserved_after_anchors)
     print(f"  Labels placed: {n_anchors} anchors + {n_auto} auto (of {len(auto_candidates)} candidates)")
 
-    footnote = ("  *AK/HI counties have no contiguous neighbours, so they fall back to the "
-                "flat-mean shrinkage model, not the spatial model used for the rest of the map. "
+    # Plain-language footnote. The previous wording ("fall back to the
+    # flat-mean shrinkage model, not the spatial model") described the cause
+    # accurately and told a general reader nothing they could act on. What
+    # matters to them is that these estimates are not comparable with the rest.
+    footnote = ("  *Alaska and Hawaii have no neighbouring counties on the mainland, so their "
+                "estimates are calculated differently and are less reliable. "
                 if (ak_fallback or hi_fallback) else "")
+    # Same principle as the count/rate captions: the one thing a reader needs
+    # in order to read the map correctly, plus sources. The model
+    # specification, its validation and its known biases are in
+    # docs/methods_memo.md, not squeezed into a footer nobody finishes.
     caption = subtitle + ". " + footnote + (source_note or
-              "Sources: Open Brewery DB, Census ACS 5-year (2020-2024). County rate is the "
-              "project's adopted headline model: income, age, college share, tourism, "
-              "population density, population growth, unemployment, and rent covariates plus "
-              "state fixed effects and a BYM2 spatial random effect (neighbouring counties "
-              "inform each other's estimate), validated by held-out log-likelihood against "
-              "simpler alternatives. County outlines are Census cartographic boundaries "
-              "(clipped to shoreline). OBDB undercounts true brewery count by 7-54% depending "
-              "on the state; this map is uncorrected for that gap.")
-    fig.text(0.5, 0.01, caption, ha="center", fontsize=6.8, color="#555555", wrap=True)
+              "Rates are model estimates, adjusted for population, income, age, education, "
+              "tourism and neighbouring counties, so they differ from a county's raw brewery "
+              "count. Listings are incomplete by an estimated 7-54% depending on the state and "
+              "this map is not corrected for that.\n"
+              "Sources: Open Brewery DB, US Census ACS 2020-2024.")
+    fig.text(0.5, 0.01, caption, ha="center", fontsize=7.2, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
     plt.close(fig)
@@ -581,14 +584,18 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
                borderpad=1.0, frameon=False, fontsize=9, title_fontsize=10, scatterpoints=1)
 
     total = int(gdf[count_col].sum())
+    # Captions are written for a general reader: what the data is, the one
+    # caveat that changes how you should read it, and the sources. Everything
+    # else -- area bias, zero-county share, boundary provenance, why there is
+    # no model -- lives in the README and docs/methods_memo.md. An earlier
+    # version ran to four lines opening with "READ WITH CARE", which is a
+    # caption written for someone who has already had the argument.
     fig.text(0.5, 0.01,
-              f"Raw count of {source_note} listings per county ({total:,} nationally), with no "
-              "population denominator, no model and no capture-rate correction -- the companion to "
-              "the per-capita map, which answers a different question. Symbol AREA is proportional "
-              "to count. OBDB undercounts true brewery count by 7-54% depending on the state, so "
-              "these are listings, not a census. County outlines are Census cartographic "
-              "boundaries (clipped to shoreline).",
-              ha="center", fontsize=6.8, color="#555555", wrap=True)
+              f"Brewery listings per county, {total:,} nationally. Circle area is proportional to "
+              "the number of breweries. Listings are incomplete by an estimated 7-54% depending on "
+              "the state, so treat these as a floor rather than a census.\n"
+              "Sources: Open Brewery DB, OpenStreetMap, US Census.",
+              ha="center", fontsize=7.2, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
     plt.close(fig)
@@ -700,16 +707,11 @@ def build_count_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
 
     total = int(pd.concat([conus["_value"], alaska["_value"], hawaii["_value"]]).sum())
     fig.text(0.5, 0.01,
-              f"Raw count of {source_note} listings per county "
-              f"({total:,} nationally), with no population denominator, no model and no "
-              "capture-rate correction. READ WITH CARE: a filled county is read as "
-              "density-by-area, so a large rural county with a few breweries draws more ink "
-              "than a small dense one with many -- the proportional-symbol version "
-              "(us_brewery_count_map.png) avoids that and is the safer read for comparing "
-              "places. 55% of counties have no listed brewery and are shown near-white. "
-              "OBDB undercounts by 7-54% by state; these are listings, not a census. "
-              "Outlines are Census cartographic boundaries (clipped to shoreline).",
-              ha="center", fontsize=6.8, color="#555555", wrap=True)
+              f"Brewery listings per county, {total:,} nationally. Larger counties cover more "
+              "area, so they draw the eye more than small dense ones with the same count. "
+              "Listings are incomplete by an estimated 7-54% depending on the state.\n"
+              "Sources: Open Brewery DB, OpenStreetMap, US Census.",
+              ha="center", fontsize=7.2, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
     plt.close(fig)
@@ -821,15 +823,12 @@ def build_rate_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
 
     total = int(pd.concat([conus["_count"], alaska["_count"], hawaii["_count"]]).sum())
     fig.text(0.5, 0.01,
-              f"{source_note} listings ({total:,} nationally) divided by ACS 2020-2024 adults "
-              "21+, with NO model and no capture-rate correction. Colour fades toward white as "
-              "the Poisson relative standard error of the county's own count grows (one brewery "
-              "= 100% RSE), so a single brewery in a small county cannot read as a hotspot. "
-              "Labels are restricted to counties with at least 5 breweries. This asks a "
-              "different question from the count map: population explains about half the "
-              "variance in raw counts, and the two top-10 lists share only one county. "
-              "OBDB undercounts by 7-54% by state. Outlines are Census cartographic boundaries.",
-              ha="center", fontsize=6.8, color="#555555", wrap=True)
+              f"Brewery listings ({total:,} nationally) per 100,000 adults aged 21 and over. "
+              "Counties are shown fainter where the rate rests on only a handful of breweries "
+              "and is correspondingly uncertain. Listings are incomplete by an estimated 7-54% "
+              "depending on the state.\n"
+              "Sources: Open Brewery DB, OpenStreetMap, US Census ACS 2020-2024.",
+              ha="center", fontsize=7.2, color="#555555", wrap=True)
 
     fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
     plt.close(fig)
