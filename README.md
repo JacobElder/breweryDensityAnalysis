@@ -56,6 +56,13 @@ vanish on the rate map — and that difference is the finding, not an artifact.
 
 ![Raw brewery count per US county, proportional symbols](docs/images/brewery_count_map.png)
 
+**Count and rate answer different questions, so the project ships both.** A raw
+count map is substantially a population map — log(count) against log(adults 21+)
+gives r = 0.73, so population explains about half the variance, and the
+top-10-by-count and top-10-by-rate lists share exactly **one** county (Boulder,
+CO). Count tells you how many breweries are in a place; rate tells you where
+brewing is concentrated. Neither is the "right" one.
+
 The same counts as a choropleth, with the highest-count counties labelled.
 Easier to read precisely; the tradeoff is that a filled county is decoded as
 density-by-area, so a large rural county with a few breweries draws more ink
@@ -63,6 +70,14 @@ than a small dense one with many. Use the symbol version above when comparing
 places, this one when reading a specific county.
 
 ![Raw brewery count per US county, choropleth](docs/images/brewery_count_choropleth.png)
+
+And the per-capita companion, from the same union records and likewise with no
+model. Colour fades as the Poisson relative standard error of a county's own
+count grows, so a single brewery in a small county cannot read as a hotspot —
+the job the old population floor did, handled continuously rather than by
+hiding three-quarters of the map.
+
+![Breweries per 100,000 adults 21+, raw, no model](docs/images/brewery_rate_choropleth.png)
 
 > **The two maps above use different brewery counts, deliberately.** The rate
 > map is built on OBDB alone (6,626 records); the count map is built on the
@@ -84,6 +99,7 @@ filenames:
 |---|---|---|
 | `docs/images/brewery_count_map.png` | OBDB ∪ OSM union | none — raw counts (proportional symbols) |
 | `docs/images/brewery_count_choropleth.png` | OBDB ∪ OSM union | none — raw counts (choropleth) |
+| `docs/images/brewery_rate_choropleth.png` | OBDB ∪ OSM union | none — raw per-capita rate |
 | `docs/images/choropleth.png` (rate map) | OBDB only | covariates + state FE + BYM2 |
 | `us_brewery_density_choropleth_floored.png` | OBDB only | same, with a population floor |
 | `us_brewery_density_choropleth_corrected*.png` | OBDB, capture-rate corrected | EB shrinkage, no spatial term |

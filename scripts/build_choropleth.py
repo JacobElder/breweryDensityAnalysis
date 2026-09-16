@@ -708,6 +708,126 @@ def build_count_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     print(f"Wrote {out_path}")
 
 
+# Bins for the model-free per-capita map, per 100,000 adults 21+.
+RATE_BINS = [0, 1, 2, 4, 7, 11, 16]
+# A county's rate is faded by the Poisson relative standard error of its own
+# count, 1/sqrt(n): one brewery carries 100% RSE, four 50%, twenty-five 20%.
+# This is the model-free analogue of the posterior-width fade on the modelled
+# map, and it exists to stop a single brewery in a tiny county reading as a
+# national hotspot -- the failure the population floor used to guard against,
+# handled continuously instead of by exclusion.
+RATE_RELIABLE_RSE = 0.20   # n = 25, drawn at full strength
+RATE_UNRELIABLE_RSE = 1.00  # n = 1, faded to MIN_ALPHA
+
+
+def build_rate_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
+    """Per-capita brewery rate from the UNION counts, with NO model.
+
+    WHY THIS EXISTS. A raw-count map is substantially a population map --
+    log(count) against log(adults 21+) gives r = 0.73, so population explains
+    about half the variance, and the top-10-by-count and top-10-by-rate lists
+    share exactly one county (Boulder CO). Count answers "how many breweries
+    are here"; rate answers "where is brewing concentrated". They are different
+    questions and both deserve an answer.
+
+    The project's other rate map runs the OBDB-only count through the BYM2
+    model. This one divides the union count straight by population: the better
+    numerator (13.9% from registry truth vs 34.6%, memo 18.12) and no modelling
+    assumptions at all. It is the direct per-capita companion to the count map
+    -- same records, same absence of a model, one divided by population.
+    """
+    gdf, count_col, source_note = attach_union_count(gdf.copy())
+    gdf["_count"] = gdf[count_col]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        gdf["_value"] = np.where(gdf["adults_21plus"] > 0,
+                                  gdf["_count"] / gdf["adults_21plus"] * 100_000, np.nan)
+        # Poisson RSE of the observed count; undefined at zero, where the rate
+        # is exactly 0 and needs no fading.
+        rse = np.where(gdf["_count"] > 0, 1.0 / np.sqrt(gdf["_count"].clip(lower=1)), 0.0)
+    span = np.log(RATE_UNRELIABLE_RSE) - np.log(RATE_RELIABLE_RSE)
+    r = 1.0 - (np.log(np.clip(rse, RATE_RELIABLE_RSE, RATE_UNRELIABLE_RSE))
+               - np.log(RATE_RELIABLE_RSE)) / span
+    gdf["_strength"] = np.where(gdf["_count"] > 0, MIN_ALPHA + (1 - MIN_ALPHA) * r, 1.0)
+
+    gdf_conus = gdf.to_crs(epsg=5070)
+    territory_fips = {"02", "15", "72", "78", "60", "66", "69"}
+    conus = gdf_conus[~gdf_conus["STATEFP"].isin(territory_fips)]
+    alaska = gdf[gdf["STATEFP"] == "02"].to_crs(epsg=3338)
+    hawaii = gdf[gdf["STATEFP"] == "15"].to_crs(epsg=3563)
+
+    drawn = pd.concat([conus["_value"], alaska["_value"], hawaii["_value"]]).dropna()
+    vmax = float(drawn.max())
+    bins = [b for b in RATE_BINS if b < vmax] + [vmax + 1e-9]
+    # Open-ended top class. The maximum is set by a county with a handful of
+    # breweries over a few hundred adults (317/100k), so printing it as
+    # "16-317" hands the legend to an outlier and makes every real value look
+    # like nothing. The fade already de-emphasises those counties; the label
+    # should not re-advertise them.
+    labels = [f"{bins[i]:.0f}-{bins[i+1]:.0f}" if i < len(bins) - 2
+              else f"{bins[i]:.0f}+" for i in range(len(bins) - 1)]
+    norm = BoundaryNorm(bins, CMAP.N)
+
+    def draw(ax, sub):
+        vals = sub["_value"].to_numpy(dtype=float)
+        colors = CMAP(norm(np.nan_to_num(vals, nan=0.0)))
+        colors = fade_to_page(colors, sub["_strength"].to_numpy(dtype=float))
+        colors[np.isnan(vals)] = list(to_rgb(NO_DATA_COLOR)) + [1.0]
+        sub.plot(ax=ax, color=colors, edgecolor="#999999", linewidth=0.12)
+        if len(sub):
+            sub.dissolve(by="STATEFP").boundary.plot(
+                ax=ax, color=STATE_EDGE_COLOR, linewidth=STATE_EDGE_WIDTH, zorder=4)
+        ax.set_axis_off()
+
+    fig = plt.figure(figsize=(16, 10), facecolor=PAGE_COLOR)
+    ax = fig.add_axes((0.02, 0.08, 0.96, 0.86))
+    ax.set_facecolor(PAGE_COLOR)
+    draw(ax, conus)
+    ax.set_title("Breweries per 100,000 Adults 21+, by US County (raw, no model)",
+                  fontsize=17, fontweight="bold", pad=12)
+
+    ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
+    draw(ax_ak, alaska)
+    ax_ak.set_title("AK", fontsize=9)
+    ax_hi = fig.add_axes((0.20, 0.05, 0.10, 0.14))
+    draw(ax_hi, hawaii)
+    ax_hi.set_title("HI", fontsize=9)
+
+    legend_elems = [Patch(facecolor=CMAP(norm((bins[i] + bins[i+1]) / 2)), edgecolor="#999999",
+                           label=labels[i]) for i in range(len(labels))]
+    legend = ax.legend(handles=legend_elems, loc="lower right", bbox_to_anchor=(0.99, 0.01),
+                        title="Breweries per 100k\nadults 21+", fontsize=9,
+                        title_fontsize=10, frameon=False)
+    fig.canvas.draw()
+    reserved = [legend.get_window_extent(renderer=fig.canvas.get_renderer())]
+
+    # Label top-rate counties, but only where the rate rests on enough
+    # breweries to mean something -- otherwise the labels advertise noise.
+    pool = conus[(conus["_count"] >= 5) & conus["_value"].notna()].nlargest(60, "_value")
+    candidates = [
+        LabelCandidate(text=f"{row['NAMELSAD']}, {row['state_abbr']}",
+                        x=row.geometry.centroid.x, y=row.geometry.centroid.y,
+                        priority=float(row["_value"]))
+        for _, row in pool.iterrows()]
+    n = place_labels(fig, ax, candidates, max_labels=MAX_COUNT_LABELS, reserved_boxes=reserved)
+    print(f"  Labels placed: {n} of {len(candidates)} candidates")
+
+    total = int(pd.concat([conus["_count"], alaska["_count"], hawaii["_count"]]).sum())
+    fig.text(0.5, 0.01,
+              f"{source_note} listings ({total:,} nationally) divided by ACS 2020-2024 adults "
+              "21+, with NO model and no capture-rate correction. Colour fades toward white as "
+              "the Poisson relative standard error of the county's own count grows (one brewery "
+              "= 100% RSE), so a single brewery in a small county cannot read as a hotspot. "
+              "Labels are restricted to counties with at least 5 breweries. This asks a "
+              "different question from the count map: population explains about half the "
+              "variance in raw counts, and the two top-10 lists share only one county. "
+              "OBDB undercounts by 7-54% by state. Outlines are Census cartographic boundaries.",
+              ha="center", fontsize=6.8, color="#555555", wrap=True)
+
+    fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
+    plt.close(fig)
+    print(f"Wrote {out_path}")
+
+
 def main() -> None:
     gdf = load_county_geodata()
     build_map(gdf, "data/processed/us_brewery_density_choropleth_uncertainty.png",
@@ -717,6 +837,7 @@ def main() -> None:
               floor=POPULATION_FLOOR)
     build_count_map(gdf, "data/processed/us_brewery_count_map.png")
     build_count_choropleth(gdf, "data/processed/us_brewery_count_choropleth.png")
+    build_rate_choropleth(gdf, "data/processed/us_brewery_rate_choropleth.png")
 
 
 if __name__ == "__main__":
