@@ -210,14 +210,14 @@ UNION_BETWEEN_STATE_LOG_SD = 0.249
 # ends of the chain agree and every renderer works.
 #
 # TO ADOPT THE UNION BASIS, on a machine with headroom:
-#   1. set CAPTURE_BASIS = "obdb"
+#   1. change the CAPTURE_BASIS assignment below to "union"
 #   2. uv run python scripts/build_national_county_dataset.py
 #   3. uv run python scripts/fit_combined_spatial_covariate_model.py --production-only
 #   4. regenerate outputs; build_choropleth.py's guard will pass once the
 #      bases agree.
 # Everything that step needs is already committed: UNION_STATE_CAPTURE_RATES,
 # the union pooled constants, and us_county_union_counts.parquet.
-CAPTURE_BASIS = "union"
+CAPTURE_BASIS = "obdb"
 
 
 def _active_rates() -> dict:
