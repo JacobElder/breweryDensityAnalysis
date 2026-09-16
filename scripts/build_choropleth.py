@@ -482,6 +482,25 @@ def _draw_uncertainty_key(fig, ax, bins, norm):
     return key_ax.get_window_extent(renderer=fig.canvas.get_renderer())
 
 
+def attach_union_count(gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, str, str]:
+    """Merge the OBDB-union-OSM count in, returning (gdf, count_col, source_label).
+
+    Factored out because BOTH count renderers need it and having the merge live
+    inside one of them meant the other silently drew OBDB-only counts -- the
+    choropleth reported 6,626 breweries and a 140 maximum while the symbol map
+    reported 8,369 and 157, from what was supposed to be the same data.
+    """
+    union_path = "data/processed/us_county_union_counts.parquet"
+    if not os.path.exists(union_path):
+        return gdf, "obdb_count", "Open Brewery DB"
+    u = pd.read_parquet(union_path)
+    gdf = gdf.merge(
+        u[["county_geoid", "union_count"]].rename(columns={"county_geoid": "GEOID"}),
+        on="GEOID", how="left")
+    gdf["union_count"] = gdf["union_count"].fillna(gdf["obdb_count"])
+    return gdf, "union_count", "Open Brewery DB union OpenStreetMap"
+
+
 def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     """Proportional-symbol map of the RAW OBSERVED brewery count per county.
 
@@ -509,19 +528,7 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     # below truth; the union lifts national coverage from 69% to 87% of the
     # Brewers Association figure and takes the median calibrated-state capture
     # rate from 0.654 to 0.871. See scripts/build_union_county_counts.py.
-    union_path = "data/processed/us_county_union_counts.parquet"
-    count_col, source_note = "obdb_count", "Open Brewery DB"
-    if os.path.exists(union_path):
-        u = pd.read_parquet(union_path)
-        # Rename rather than merge on right_on: gdf already carries a
-        # `county_geoid` from load_county_geodata(), so a second merge bringing
-        # its own would silently become county_geoid_x/_y and break any later
-        # reference to the bare name.
-        gdf = gdf.merge(
-            u[["county_geoid", "union_count"]].rename(columns={"county_geoid": "GEOID"}),
-            on="GEOID", how="left")
-        gdf["union_count"] = gdf["union_count"].fillna(gdf["obdb_count"])
-        count_col, source_note = "union_count", "Open Brewery DB union OpenStreetMap"
+    gdf, count_col, source_note = attach_union_count(gdf)
     gdf = gdf[gdf[count_col].notna()].copy()
     gdf_conus = gdf.to_crs(epsg=5070)
     territory_fips = {"02", "15", "72", "78", "60", "66", "69"}
@@ -584,6 +591,123 @@ def build_count_map(gdf: gpd.GeoDataFrame, out_path: str) -> None:
     print(f"Wrote {out_path}")
 
 
+# Bin edges for the COUNT choropleth. Counts are far more skewed than rates --
+# 55% of counties have none and the top 11 hold 50+ each -- so equal-width bins
+# would put almost everything in one class. These are roughly log-spaced, with
+# zero given its own class because "no breweries listed" is a different
+# statement from "few".
+COUNT_BINS = [0, 1, 2, 3, 5, 10, 20, 50]
+COUNT_ZERO_COLOR = "#f7f7f7"
+MAX_COUNT_LABELS = 20
+
+
+def build_count_choropleth(gdf: gpd.GeoDataFrame, out_path: str) -> None:
+    """Choropleth of the raw brewery COUNT, as a companion to the
+    proportional-symbol version.
+
+    WHY BOTH. Symbols avoid the area bias that makes a choropleth of counts
+    misleading -- fill is read as density-by-area, so a large rural county with
+    3 breweries draws more ink than a small dense one with 30. That bias is
+    real and is why the symbol map exists. But symbols are genuinely harder to
+    read precisely, especially for mid-range values and in the dense Northeast,
+    and readers asked for a fill version. Both ship; the caption on this one
+    names the bias rather than leaving it to be discovered.
+
+    Zero gets its own near-white class rather than being folded into the lowest
+    bin: 55% of counties have no listed brewery, and "none" is a different
+    claim from "one or two".
+    """
+    gdf, count_col, source_note = attach_union_count(gdf.copy())
+    gdf["_value"] = gdf[count_col]
+
+    gdf_conus = gdf.to_crs(epsg=5070)
+    territory_fips = {"02", "15", "72", "78", "60", "66", "69"}
+    conus = gdf_conus[~gdf_conus["STATEFP"].isin(territory_fips)]
+    alaska = gdf[gdf["STATEFP"] == "02"].to_crs(epsg=3338)
+    hawaii = gdf[gdf["STATEFP"] == "15"].to_crs(epsg=3563)
+
+    vmax = float(pd.concat([conus["_value"], alaska["_value"], hawaii["_value"]]).max())
+    bins = [b for b in COUNT_BINS if b < vmax] + [vmax + 1e-9]
+    labels = []
+    for i in range(len(bins) - 1):
+        lo, hi = bins[i], bins[i + 1]
+        if lo == 0:
+            labels.append("0")
+        elif i == len(bins) - 2:
+            labels.append(f"{lo:.0f}-{vmax:.0f}")
+        elif hi - lo == 1:
+            labels.append(f"{lo:.0f}")
+        else:
+            labels.append(f"{lo:.0f}-{hi - 1:.0f}")
+    norm = BoundaryNorm(bins, CMAP.N)
+
+    def draw(ax, sub):
+        nonzero = sub[sub["_value"] > 0]
+        zero = sub[sub["_value"] == 0]
+        if len(zero):
+            zero.plot(ax=ax, color=COUNT_ZERO_COLOR, edgecolor="#cccccc", linewidth=0.12)
+        if len(nonzero):
+            nonzero.plot(ax=ax, column="_value", cmap=CMAP, norm=norm,
+                          edgecolor="#999999", linewidth=0.12)
+        if len(sub):
+            sub.dissolve(by="STATEFP").boundary.plot(
+                ax=ax, color=STATE_EDGE_COLOR, linewidth=STATE_EDGE_WIDTH, zorder=4)
+        ax.set_axis_off()
+
+    fig = plt.figure(figsize=(16, 10), facecolor=PAGE_COLOR)
+    ax = fig.add_axes((0.02, 0.08, 0.96, 0.86))
+    ax.set_facecolor(PAGE_COLOR)
+    draw(ax, conus)
+    ax.set_title("Breweries per US County (raw count, no model)",
+                  fontsize=17, fontweight="bold", pad=12)
+
+    ax_ak = fig.add_axes((0.02, 0.05, 0.20, 0.22))
+    draw(ax_ak, alaska)
+    ax_ak.set_title("AK", fontsize=9)
+    ax_hi = fig.add_axes((0.20, 0.05, 0.10, 0.14))
+    draw(ax_hi, hawaii)
+    ax_hi.set_title("HI", fontsize=9)
+
+    legend_elems = [Patch(facecolor=COUNT_ZERO_COLOR, edgecolor="#cccccc", label="0")]
+    legend_elems += [
+        Patch(facecolor=CMAP(norm((bins[i] + bins[i + 1]) / 2)), edgecolor="#999999",
+              label=labels[i]) for i in range(1, len(labels))]
+    legend = ax.legend(handles=legend_elems, loc="lower right", bbox_to_anchor=(0.99, 0.01),
+                        title="Breweries in county", fontsize=9, title_fontsize=10, frameon=False)
+
+    fig.canvas.draw()
+    reserved = [legend.get_window_extent(renderer=fig.canvas.get_renderer())]
+
+    # Label the highest-COUNT counties, which is a different list from the
+    # rate map's -- metros dominate here and largely vanish there. That
+    # difference is the finding, so the labels should make it legible.
+    pool = conus[conus["_value"] > 0].nlargest(60, "_value")
+    candidates = [
+        LabelCandidate(text=f"{row['NAMELSAD']}, {row['state_abbr']}",
+                        x=row.geometry.centroid.x, y=row.geometry.centroid.y,
+                        priority=float(row["_value"]))
+        for _, row in pool.iterrows()]
+    n = place_labels(fig, ax, candidates, max_labels=MAX_COUNT_LABELS, reserved_boxes=reserved)
+    print(f"  Labels placed: {n} of {len(candidates)} candidates")
+
+    total = int(pd.concat([conus["_value"], alaska["_value"], hawaii["_value"]]).sum())
+    fig.text(0.5, 0.01,
+              f"Raw count of {source_note} listings per county "
+              f"({total:,} nationally), with no population denominator, no model and no "
+              "capture-rate correction. READ WITH CARE: a filled county is read as "
+              "density-by-area, so a large rural county with a few breweries draws more ink "
+              "than a small dense one with many -- the proportional-symbol version "
+              "(us_brewery_count_map.png) avoids that and is the safer read for comparing "
+              "places. 55% of counties have no listed brewery and are shown near-white. "
+              "OBDB undercounts by 7-54% by state; these are listings, not a census. "
+              "Outlines are Census cartographic boundaries (clipped to shoreline).",
+              ha="center", fontsize=6.8, color="#555555", wrap=True)
+
+    fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=PAGE_COLOR)
+    plt.close(fig)
+    print(f"Wrote {out_path}")
+
+
 def main() -> None:
     gdf = load_county_geodata()
     build_map(gdf, "data/processed/us_brewery_density_choropleth_uncertainty.png",
@@ -592,6 +716,7 @@ def main() -> None:
     build_map(gdf, "data/processed/us_brewery_density_choropleth_floored.png",
               floor=POPULATION_FLOOR)
     build_count_map(gdf, "data/processed/us_brewery_count_map.png")
+    build_count_choropleth(gdf, "data/processed/us_brewery_count_choropleth.png")
 
 
 if __name__ == "__main__":

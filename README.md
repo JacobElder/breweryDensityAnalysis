@@ -56,6 +56,14 @@ vanish on the rate map — and that difference is the finding, not an artifact.
 
 ![Raw brewery count per US county, proportional symbols](docs/images/brewery_count_map.png)
 
+The same counts as a choropleth, with the highest-count counties labelled.
+Easier to read precisely; the tradeoff is that a filled county is decoded as
+density-by-area, so a large rural county with a few breweries draws more ink
+than a small dense one with many. Use the symbol version above when comparing
+places, this one when reading a specific county.
+
+![Raw brewery count per US county, choropleth](docs/images/brewery_count_choropleth.png)
+
 > **The two maps above use different brewery counts, deliberately.** The rate
 > map is built on OBDB alone (6,626 records); the count map is built on the
 > OBDB ∪ OSM union (8,369). They are not yet consistent because wiring the
@@ -74,7 +82,8 @@ filenames:
 
 | File | Count source | Model |
 |---|---|---|
-| `docs/images/brewery_count_map.png` | OBDB ∪ OSM union | none — raw counts |
+| `docs/images/brewery_count_map.png` | OBDB ∪ OSM union | none — raw counts (proportional symbols) |
+| `docs/images/brewery_count_choropleth.png` | OBDB ∪ OSM union | none — raw counts (choropleth) |
 | `docs/images/choropleth.png` (rate map) | OBDB only | covariates + state FE + BYM2 |
 | `us_brewery_density_choropleth_floored.png` | OBDB only | same, with a population floor |
 | `us_brewery_density_choropleth_corrected*.png` | OBDB, capture-rate corrected | EB shrinkage, no spatial term |
